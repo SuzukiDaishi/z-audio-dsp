@@ -1,0 +1,7 @@
+{
+  "description": "AnalogGenerator Sine 440Hz @ 48kHz, 1 second",
+  "sample_count": 48000,
+  "rms": 0.70710698,
+  "peak": 1.00000000,
+  "spectral_centroid_hz": 439.8399
+}

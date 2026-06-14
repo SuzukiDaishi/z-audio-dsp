@@ -1,0 +1,17 @@
+[package]
+name = "z-audio-synth"
+description = "Simple synth runtime (voice management, note handling) built on z-audio-dsp."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+z-audio-dsp = { path = "../z-audio-dsp" }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "bench_simple_synth"
+harness = false

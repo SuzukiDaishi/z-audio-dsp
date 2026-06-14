@@ -1,0 +1,29 @@
+[package]
+name = "z-audio-dsp"
+description = "Pure DSP library for z-audio-dsp: generators, modulators, and effects."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rand = { version = "0.8", default-features = false, features = ["small_rng"] }
+serde = { version = "1", optional = true, features = ["derive"] }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[features]
+default = ["std"]
+std = []
+simd = []
+serde = ["dep:serde"]
+alloc-check = []
+
+[[bench]]
+name = "bench_generators"
+harness = false
+
+[[bench]]
+name = "bench_eq"
+harness = false

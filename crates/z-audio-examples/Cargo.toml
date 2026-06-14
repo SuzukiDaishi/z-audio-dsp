@@ -1,0 +1,16 @@
+[package]
+name = "z-audio-examples"
+description = "CLI render examples (WAV output) for z-audio-dsp and z-audio-synth."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "z_audio_examples"
+path = "src/lib.rs"
+
+[dependencies]
+z-audio-dsp = { path = "../z-audio-dsp" }
+z-audio-synth = { path = "../z-audio-synth" }
+hound = "3.5"
