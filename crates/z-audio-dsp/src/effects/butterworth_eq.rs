@@ -27,6 +27,8 @@ pub(crate) const HIGH_FREQ_RANGE: (f32, f32) = (1_000.0, 20_000.0);
 pub(crate) const DEFAULT_LOW_FREQ_HZ: f32 = 200.0;
 pub(crate) const DEFAULT_MID_FREQ_HZ: f32 = 1_000.0;
 pub(crate) const DEFAULT_HIGH_FREQ_HZ: f32 = 5_000.0;
+pub(crate) const EQ_GAIN_DB_RANGE: (f32, f32) = (-24.0, 24.0);
+pub(crate) const EQ_Q_RANGE: (f32, f32) = (0.1, 10.0);
 
 /// The filter shape used by a single [`ButterworthBand`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +76,7 @@ pub struct ButterworthBand {
     pub enabled: bool,
     pub kind: ButterworthKind,
     pub frequency_hz: f32,
+    pub gain_db: f32,
     pub q: f32,
 }
 
@@ -116,33 +119,46 @@ impl BandState {
         left: f32,
         right: f32,
     ) -> (f32, f32) {
+        if !params.enabled {
+            self.biquad.reset_state();
+            return (left, right);
+        }
+
         let target = params
             .frequency_hz
             .clamp(self.min_freq_hz, self.max_freq_hz);
         self.smoothed_freq.set_target(target);
         let freq = self.smoothed_freq.tick().min(sample_rate * 0.45);
 
-        if params.enabled {
-            let q = params.q.max(0.01);
-            let (b0, b1, b2, a1, a2) = match params.kind {
-                ButterworthKind::LowPass => lowpass_coefficients(freq, q, sample_rate),
-                ButterworthKind::BandPass => bandpass_coefficients(freq, q, sample_rate),
-                ButterworthKind::HighPass => highpass_coefficients(freq, q, sample_rate),
-            };
-            self.biquad.set_coefficients(b0, b1, b2, a1, a2);
-        } else {
-            self.biquad.set_coefficients(1.0, 0.0, 0.0, 0.0, 0.0);
-        }
-
-        self.biquad.process(left, right)
+        let q = params.q.clamp(EQ_Q_RANGE.0, EQ_Q_RANGE.1);
+        let (b0, b1, b2, a1, a2) = match params.kind {
+            ButterworthKind::LowPass => lowpass_coefficients(freq, q, sample_rate),
+            ButterworthKind::BandPass => bandpass_coefficients(freq, q, sample_rate),
+            ButterworthKind::HighPass => highpass_coefficients(freq, q, sample_rate),
+        };
+        self.biquad.set_coefficients(b0, b1, b2, a1, a2);
+        let gain = db_to_gain(params.gain_db.clamp(EQ_GAIN_DB_RANGE.0, EQ_GAIN_DB_RANGE.1));
+        let (out_l, out_r) = self.biquad.process(left, right);
+        (out_l * gain, out_r * gain)
     }
+}
+
+fn db_to_gain(db: f32) -> f32 {
+    10.0_f32.powf(db / 20.0)
 }
 
 /// A 3-band Butterworth EQ: low-band, mid-band, and high-band filters
 /// connected in series (`input -> low -> mid -> high -> output`).
 ///
 /// Defaults: `low` is a low-pass at 200 Hz, `mid` is a band-pass at 1 kHz,
-/// and `high` is a high-pass at 5 kHz, all enabled with `q == BUTTERWORTH_Q`.
+/// and `high` is a high-pass at 5 kHz, each with `q == BUTTERWORTH_Q`, but
+/// **all three start disabled** (pass-through). Because the bands are
+/// cascaded in series rather than summed in parallel, enabling the default
+/// low-pass(200Hz) and high-pass(5kHz) simultaneously carves out almost the
+/// entire musical range *between* them (each is a 2nd-order/-12dB-per-octave
+/// filter, so a note a few octaves into either band's stopband is crushed by
+/// -50dB or more) — clearly wrong as an out-of-the-box default for an EQ.
+/// Bands stay available for the user/host to enable explicitly.
 pub struct ThreeBandButterworthEq {
     pub low: ButterworthBand,
     pub mid: ButterworthBand,
@@ -158,21 +174,24 @@ impl ThreeBandButterworthEq {
     pub fn new() -> Self {
         Self {
             low: ButterworthBand {
-                enabled: true,
+                enabled: false,
                 kind: ButterworthKind::LowPass,
                 frequency_hz: DEFAULT_LOW_FREQ_HZ,
+                gain_db: 0.0,
                 q: BUTTERWORTH_Q,
             },
             mid: ButterworthBand {
-                enabled: true,
+                enabled: false,
                 kind: ButterworthKind::BandPass,
                 frequency_hz: DEFAULT_MID_FREQ_HZ,
+                gain_db: 0.0,
                 q: BUTTERWORTH_Q,
             },
             high: ButterworthBand {
-                enabled: true,
+                enabled: false,
                 kind: ButterworthKind::HighPass,
                 frequency_hz: DEFAULT_HIGH_FREQ_HZ,
+                gain_db: 0.0,
                 q: BUTTERWORTH_Q,
             },
             low_state: BandState::new(DEFAULT_LOW_FREQ_HZ, LOW_FREQ_RANGE),
@@ -242,6 +261,7 @@ mod tests {
     #[test]
     fn low_pass_attenuates_high_frequency_signal() {
         let mut eq = ThreeBandButterworthEq::new();
+        eq.low.enabled = true;
         eq.mid.enabled = false;
         eq.high.enabled = false;
         eq.prepare(48_000.0, 128);
@@ -263,6 +283,7 @@ mod tests {
     fn band_pass_attenuates_low_frequency_signal() {
         let mut eq = ThreeBandButterworthEq::new();
         eq.low.enabled = false;
+        eq.mid.enabled = true;
         eq.high.enabled = false;
         eq.prepare(48_000.0, 128);
 
@@ -284,6 +305,7 @@ mod tests {
         let mut eq = ThreeBandButterworthEq::new();
         eq.low.enabled = false;
         eq.mid.enabled = false;
+        eq.high.enabled = true;
         eq.prepare(48_000.0, 128);
 
         let mut left = sine_signal(100.0, 48_000.0, 4800);
@@ -318,6 +340,96 @@ mod tests {
         for (a, b) in right.iter().zip(original.iter()) {
             assert!((a - b).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn disabled_bands_ignore_gain_q_frequency_and_type() {
+        let mut eq = ThreeBandButterworthEq::new();
+        eq.low.enabled = false;
+        eq.low.kind = ButterworthKind::HighPass;
+        eq.low.frequency_hz = 1_800.0;
+        eq.low.gain_db = 24.0;
+        eq.low.q = 10.0;
+        eq.mid.enabled = false;
+        eq.mid.kind = ButterworthKind::LowPass;
+        eq.mid.frequency_hz = 80.0;
+        eq.mid.gain_db = -24.0;
+        eq.mid.q = 0.1;
+        eq.high.enabled = false;
+        eq.high.kind = ButterworthKind::BandPass;
+        eq.high.frequency_hz = 12_000.0;
+        eq.high.gain_db = 18.0;
+        eq.high.q = 8.0;
+        eq.prepare(48_000.0, 128);
+
+        let original = sine_signal(440.0, 48_000.0, 512);
+        let mut left = original.clone();
+        let mut right = original.clone();
+        process(&mut eq, &mut left, &mut right);
+
+        assert_eq!(left, original);
+        assert_eq!(right, original);
+    }
+
+    #[test]
+    fn enabled_band_gain_db_scales_output_rms() {
+        let input = sine_signal(1_000.0, 48_000.0, 48_000);
+        let input_rms = rms(&input);
+
+        let mut boost = ThreeBandButterworthEq::new();
+        boost.mid.enabled = true;
+        boost.mid.gain_db = 6.0;
+        boost.prepare(48_000.0, 128);
+        let mut boosted = input.clone();
+        let mut boosted_r = input.clone();
+        process(&mut boost, &mut boosted, &mut boosted_r);
+        let boosted_rms = rms(&boosted[4_800..]);
+
+        let mut cut = ThreeBandButterworthEq::new();
+        cut.mid.enabled = true;
+        cut.mid.gain_db = -12.0;
+        cut.prepare(48_000.0, 128);
+        let mut cut_left = input.clone();
+        let mut cut_right = input.clone();
+        process(&mut cut, &mut cut_left, &mut cut_right);
+        let cut_rms = rms(&cut_left[4_800..]);
+
+        assert!(
+            boosted_rms > input_rms * 1.8,
+            "input={input_rms}, boosted={boosted_rms}"
+        );
+        assert!(
+            cut_rms < input_rms * 0.35,
+            "input={input_rms}, cut={cut_rms}"
+        );
+    }
+
+    #[test]
+    fn q_changes_band_pass_width() {
+        let input = sine_signal(700.0, 48_000.0, 48_000);
+
+        let mut wide = ThreeBandButterworthEq::new();
+        wide.mid.enabled = true;
+        wide.mid.q = 0.5;
+        wide.prepare(48_000.0, 128);
+        let mut wide_left = input.clone();
+        let mut wide_right = input.clone();
+        process(&mut wide, &mut wide_left, &mut wide_right);
+        let wide_rms = rms(&wide_left[4_800..]);
+
+        let mut narrow = ThreeBandButterworthEq::new();
+        narrow.mid.enabled = true;
+        narrow.mid.q = 8.0;
+        narrow.prepare(48_000.0, 128);
+        let mut narrow_left = input.clone();
+        let mut narrow_right = input.clone();
+        process(&mut narrow, &mut narrow_left, &mut narrow_right);
+        let narrow_rms = rms(&narrow_left[4_800..]);
+
+        assert!(
+            wide_rms > narrow_rms * 2.0,
+            "wide={wide_rms}, narrow={narrow_rms}"
+        );
     }
 
     #[test]
@@ -356,8 +468,11 @@ mod tests {
     #[test]
     fn frequency_is_clamped_to_band_range() {
         let mut eq = ThreeBandButterworthEq::new();
+        eq.low.enabled = true;
         eq.low.frequency_hz = 1.0e6; // far above LOW_FREQ_RANGE.1
+        eq.mid.enabled = true;
         eq.mid.frequency_hz = -100.0; // below MID_FREQ_RANGE.0
+        eq.high.enabled = true;
         eq.high.frequency_hz = 0.0; // below HIGH_FREQ_RANGE.0
         eq.prepare(48_000.0, 128);
 

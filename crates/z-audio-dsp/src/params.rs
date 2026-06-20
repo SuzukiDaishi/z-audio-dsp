@@ -9,8 +9,8 @@
 //! `SimpleSynth::set_param` in `z-audio-synth` for the runtime dispatch.
 
 use crate::effects::butterworth_eq::{
-    DEFAULT_HIGH_FREQ_HZ, DEFAULT_LOW_FREQ_HZ, DEFAULT_MID_FREQ_HZ, HIGH_FREQ_RANGE,
-    LOW_FREQ_RANGE, MID_FREQ_RANGE,
+    DEFAULT_HIGH_FREQ_HZ, DEFAULT_LOW_FREQ_HZ, DEFAULT_MID_FREQ_HZ, EQ_GAIN_DB_RANGE, EQ_Q_RANGE,
+    HIGH_FREQ_RANGE, LOW_FREQ_RANGE, MID_FREQ_RANGE,
 };
 
 /// A stable identifier for an automatable parameter.
@@ -53,6 +53,12 @@ pub enum ParamId {
     EqHighEnabled = 46,
     EqHighFreq = 47,
     EqHighType = 48,
+    EqLowGainDb = 49,
+    EqLowQ = 50,
+    EqMidGainDb = 51,
+    EqMidQ = 52,
+    EqHighGainDb = 53,
+    EqHighQ = 54,
 }
 
 /// The physical interpretation of a [`ParamMetadata`] value.
@@ -95,7 +101,7 @@ pub struct ParamMetadata {
 
 impl ParamId {
     /// Every [`ParamId`] variant, in declaration order.
-    pub const ALL: [ParamId; 27] = [
+    pub const ALL: [ParamId; 33] = [
         ParamId::MasterGain,
         ParamId::MaxPolyphony,
         ParamId::GeneratorKind,
@@ -123,6 +129,12 @@ impl ParamId {
         ParamId::EqHighEnabled,
         ParamId::EqHighFreq,
         ParamId::EqHighType,
+        ParamId::EqLowGainDb,
+        ParamId::EqLowQ,
+        ParamId::EqMidGainDb,
+        ParamId::EqMidQ,
+        ParamId::EqHighGainDb,
+        ParamId::EqHighQ,
     ];
 
     /// Returns this parameter's metadata (name, unit, range, default).
@@ -296,7 +308,7 @@ impl ParamId {
                 unit: ParamUnit::Boolean,
                 min: 0.0,
                 max: 1.0,
-                default: 1.0,
+                default: 0.0,
                 step_count: Some(2),
             },
             ParamId::EqLowFreq => ParamMetadata {
@@ -323,7 +335,7 @@ impl ParamId {
                 unit: ParamUnit::Boolean,
                 min: 0.0,
                 max: 1.0,
-                default: 1.0,
+                default: 0.0,
                 step_count: Some(2),
             },
             ParamId::EqMidFreq => ParamMetadata {
@@ -350,7 +362,7 @@ impl ParamId {
                 unit: ParamUnit::Boolean,
                 min: 0.0,
                 max: 1.0,
-                default: 1.0,
+                default: 0.0,
                 step_count: Some(2),
             },
             ParamId::EqHighFreq => ParamMetadata {
@@ -371,6 +383,60 @@ impl ParamId {
                 default: crate::ButterworthKind::HighPass.to_param_value(),
                 step_count: Some(crate::ButterworthKind::VARIANT_COUNT),
             },
+            ParamId::EqLowGainDb => ParamMetadata {
+                id: self,
+                name: "eq_low_gain_db",
+                unit: ParamUnit::Linear,
+                min: EQ_GAIN_DB_RANGE.0,
+                max: EQ_GAIN_DB_RANGE.1,
+                default: 0.0,
+                step_count: None,
+            },
+            ParamId::EqLowQ => ParamMetadata {
+                id: self,
+                name: "eq_low_q",
+                unit: ParamUnit::Linear,
+                min: EQ_Q_RANGE.0,
+                max: EQ_Q_RANGE.1,
+                default: crate::BUTTERWORTH_Q,
+                step_count: None,
+            },
+            ParamId::EqMidGainDb => ParamMetadata {
+                id: self,
+                name: "eq_mid_gain_db",
+                unit: ParamUnit::Linear,
+                min: EQ_GAIN_DB_RANGE.0,
+                max: EQ_GAIN_DB_RANGE.1,
+                default: 0.0,
+                step_count: None,
+            },
+            ParamId::EqMidQ => ParamMetadata {
+                id: self,
+                name: "eq_mid_q",
+                unit: ParamUnit::Linear,
+                min: EQ_Q_RANGE.0,
+                max: EQ_Q_RANGE.1,
+                default: crate::BUTTERWORTH_Q,
+                step_count: None,
+            },
+            ParamId::EqHighGainDb => ParamMetadata {
+                id: self,
+                name: "eq_high_gain_db",
+                unit: ParamUnit::Linear,
+                min: EQ_GAIN_DB_RANGE.0,
+                max: EQ_GAIN_DB_RANGE.1,
+                default: 0.0,
+                step_count: None,
+            },
+            ParamId::EqHighQ => ParamMetadata {
+                id: self,
+                name: "eq_high_q",
+                unit: ParamUnit::Linear,
+                min: EQ_Q_RANGE.0,
+                max: EQ_Q_RANGE.1,
+                default: crate::BUTTERWORTH_Q,
+                step_count: None,
+            },
         }
     }
 }
@@ -383,8 +449,8 @@ mod tests {
     use crate::{ButterworthKind, EnvelopeParams, Gain, GeneratorParams, LfoParams};
 
     #[test]
-    fn all_has_27_unique_variants() {
-        assert_eq!(ParamId::ALL.len(), 27);
+    fn all_has_33_unique_variants() {
+        assert_eq!(ParamId::ALL.len(), 33);
         let mut seen = HashSet::new();
         for id in ParamId::ALL {
             assert!(seen.insert(id as u32), "duplicate ParamId in ALL: {id:?}");
@@ -532,24 +598,43 @@ mod tests {
     #[test]
     fn eq_metadata_matches_eq_defaults() {
         let eq = crate::ThreeBandButterworthEq::new();
-        assert_eq!(ParamId::EqLowEnabled.metadata().default, 1.0);
+        // All three bands start disabled (pass-through): cascading a default
+        // low-pass(200Hz) and high-pass(5kHz) in series otherwise carves out
+        // most of the musical range between them, which a 3-band EQ should
+        // never do until the user explicitly turns a band on.
+        assert_eq!(
+            ParamId::EqLowEnabled.metadata().default,
+            if eq.low.enabled { 1.0 } else { 0.0 }
+        );
         assert_eq!(ParamId::EqLowFreq.metadata().default, eq.low.frequency_hz);
         assert_eq!(
             ParamId::EqLowType.metadata().default,
             eq.low.kind.to_param_value()
         );
-        assert_eq!(ParamId::EqMidEnabled.metadata().default, 1.0);
+        assert_eq!(ParamId::EqLowGainDb.metadata().default, eq.low.gain_db);
+        assert_eq!(ParamId::EqLowQ.metadata().default, eq.low.q);
+        assert_eq!(
+            ParamId::EqMidEnabled.metadata().default,
+            if eq.mid.enabled { 1.0 } else { 0.0 }
+        );
         assert_eq!(ParamId::EqMidFreq.metadata().default, eq.mid.frequency_hz);
         assert_eq!(
             ParamId::EqMidType.metadata().default,
             eq.mid.kind.to_param_value()
         );
-        assert_eq!(ParamId::EqHighEnabled.metadata().default, 1.0);
+        assert_eq!(ParamId::EqMidGainDb.metadata().default, eq.mid.gain_db);
+        assert_eq!(ParamId::EqMidQ.metadata().default, eq.mid.q);
+        assert_eq!(
+            ParamId::EqHighEnabled.metadata().default,
+            if eq.high.enabled { 1.0 } else { 0.0 }
+        );
         assert_eq!(ParamId::EqHighFreq.metadata().default, eq.high.frequency_hz);
         assert_eq!(
             ParamId::EqHighType.metadata().default,
             eq.high.kind.to_param_value()
         );
+        assert_eq!(ParamId::EqHighGainDb.metadata().default, eq.high.gain_db);
+        assert_eq!(ParamId::EqHighQ.metadata().default, eq.high.q);
     }
 
     #[test]
@@ -560,6 +645,27 @@ mod tests {
         assert_eq!(ParamId::EqMidFreq.metadata().max, MID_FREQ_RANGE.1);
         assert_eq!(ParamId::EqHighFreq.metadata().min, HIGH_FREQ_RANGE.0);
         assert_eq!(ParamId::EqHighFreq.metadata().max, HIGH_FREQ_RANGE.1);
+    }
+
+    #[test]
+    fn eq_gain_and_q_metadata_matches_ranges() {
+        for id in [
+            ParamId::EqLowGainDb,
+            ParamId::EqMidGainDb,
+            ParamId::EqHighGainDb,
+        ] {
+            let m = id.metadata();
+            assert_eq!(m.min, EQ_GAIN_DB_RANGE.0);
+            assert_eq!(m.max, EQ_GAIN_DB_RANGE.1);
+            assert_eq!(m.default, 0.0);
+        }
+
+        for id in [ParamId::EqLowQ, ParamId::EqMidQ, ParamId::EqHighQ] {
+            let m = id.metadata();
+            assert_eq!(m.min, EQ_Q_RANGE.0);
+            assert_eq!(m.max, EQ_Q_RANGE.1);
+            assert_eq!(m.default, crate::BUTTERWORTH_Q);
+        }
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 use crate::Modulator;
 use crate::context::ProcessContext;
+use crate::math::SmoothedParam;
 
 /// The current stage of an [`Envelope`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +70,7 @@ impl Default for EnvelopeParams {
 /// Distance from a stage's target below which the stage is considered
 /// complete and the envelope advances to the next stage.
 const STAGE_EPSILON: f32 = 1.0e-3;
+const SUSTAIN_SMOOTHING_SECONDS: f32 = 0.006;
 
 /// Computes a one-pole coefficient such that, starting at distance `1.0` from
 /// the target, the remaining distance shrinks to [`STAGE_EPSILON`] after
@@ -96,6 +98,7 @@ pub struct Envelope {
     sample_rate: f32,
     state: EnvelopeState,
     value: f32,
+    sustain_level: SmoothedParam,
     release_start_value: f32,
     attack_exp_coeff: f32,
     decay_exp_coeff: f32,
@@ -112,6 +115,7 @@ impl Envelope {
             sample_rate: 48_000.0,
             state: EnvelopeState::Idle,
             value: 0.0,
+            sustain_level: SmoothedParam::new(params.sustain),
             release_start_value: 0.0,
             attack_exp_coeff: 0.0,
             decay_exp_coeff: 0.0,
@@ -126,6 +130,11 @@ impl Envelope {
     /// coefficients. Does not change the current stage or value.
     pub fn set_params(&mut self, params: EnvelopeParams) {
         self.params = params;
+        if self.state == EnvelopeState::Idle {
+            self.sustain_level.set_immediate(params.sustain);
+        } else {
+            self.sustain_level.set_target(params.sustain);
+        }
         self.recompute_exp_coeffs();
     }
 
@@ -141,6 +150,7 @@ impl Envelope {
 
     /// Starts (or restarts) the Attack stage from the current value.
     pub fn note_on(&mut self) {
+        self.sustain_level.set_immediate(self.params.sustain);
         self.enter_stage(EnvelopeState::Attack, 1.0, self.params.attack);
     }
 
@@ -196,21 +206,22 @@ impl Envelope {
                 self.advance_toward(1.0, self.attack_exp_coeff);
                 if (self.value - 1.0).abs() <= STAGE_EPSILON {
                     self.value = 1.0;
-                    let sustain = self.params.sustain;
+                    let sustain = self.sustain_level.target();
                     let decay = self.params.decay;
                     self.enter_stage(EnvelopeState::Decay, sustain, decay);
                 }
             }
             EnvelopeState::Decay => {
-                let target = self.params.sustain;
+                let target = self.sustain_level.target();
                 self.advance_toward(target, self.decay_exp_coeff);
                 if (self.value - target).abs() <= STAGE_EPSILON {
                     self.value = target;
+                    self.sustain_level.set_immediate(target);
                     self.state = EnvelopeState::Sustain;
                 }
             }
             EnvelopeState::Sustain => {
-                self.value = self.params.sustain;
+                self.value = self.sustain_level.tick();
             }
             EnvelopeState::Release => {
                 self.advance_toward(0.0, self.release_exp_coeff);
@@ -228,12 +239,15 @@ impl Modulator for Envelope {
     fn prepare(&mut self, sample_rate: f32, _max_block_size: usize) {
         debug_assert!(sample_rate > 0.0);
         self.sample_rate = sample_rate;
+        self.sustain_level
+            .configure(sample_rate, SUSTAIN_SMOOTHING_SECONDS);
         self.recompute_exp_coeffs();
     }
 
     fn reset(&mut self) {
         self.state = EnvelopeState::Idle;
         self.value = 0.0;
+        self.sustain_level.set_immediate(self.params.sustain);
         self.release_start_value = 0.0;
         self.linear_increment = 0.0;
     }

@@ -179,6 +179,7 @@ fn render_noise_bp_sweep() -> Vec<f32> {
 
     let mut eq = ThreeBandButterworthEq::new();
     eq.low.enabled = false;
+    eq.mid.enabled = true;
     eq.high.enabled = false;
     eq.mid.kind = ButterworthKind::BandPass;
     eq.mid.q = 4.0;
@@ -215,6 +216,7 @@ fn render_noise_bp_sweep() -> Vec<f32> {
 /// at 1 kHz.
 fn render_eq_impulse_lp_1khz() -> Vec<f32> {
     let mut eq = ThreeBandButterworthEq::new();
+    eq.low.enabled = true;
     eq.mid.enabled = false;
     eq.high.enabled = false;
     eq.low.kind = ButterworthKind::LowPass;

@@ -3,8 +3,11 @@
 
 use z_audio_dsp::{
     Envelope, EnvelopeParams, EnvelopeState, Generator, GeneratorInstance, GeneratorKind,
-    GeneratorParams, Lfo, LfoParams, LfoTarget, Modulator, midi_note_to_hz,
+    GeneratorParams, Lfo, LfoParams, LfoTarget, Modulator, math::SmoothedParam, midi_note_to_hz,
 };
+
+const PARAM_SMOOTHING_SECONDS: f32 = 0.006;
+const GENERATOR_XFADE_SECONDS: f32 = 0.006;
 
 /// The lifecycle state of a [`Voice`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -20,10 +23,15 @@ pub struct Voice {
     state: VoiceState,
     note: u8,
     velocity: f32,
-    gain: f32,
-    pan: f32,
+    gain: SmoothedParam,
+    pan: SmoothedParam,
+    pulse_width: SmoothedParam,
+    lfo_amount: SmoothedParam,
     generator_kind: GeneratorKind,
     generator: GeneratorInstance,
+    next_generator: Option<GeneratorInstance>,
+    generator_xfade_pos: usize,
+    generator_xfade_len: usize,
     amp_env: Envelope,
     lfo: Lfo,
     activation_id: u64,
@@ -41,10 +49,15 @@ impl Voice {
             state: VoiceState::Idle,
             note: 0,
             velocity: 0.0,
-            gain: generator_params.gain,
-            pan: generator_params.pan,
+            gain: SmoothedParam::new(generator_params.gain),
+            pan: SmoothedParam::new(generator_params.pan),
+            pulse_width: SmoothedParam::new(generator_params.pulse_width),
+            lfo_amount: SmoothedParam::new(Self::effective_lfo_amount(&LfoParams::default())),
             generator_kind: generator_params.kind,
             generator: GeneratorInstance::from_params(&generator_params, seed),
+            next_generator: None,
+            generator_xfade_pos: 0,
+            generator_xfade_len: 0,
             amp_env: Envelope::new(EnvelopeParams::default()),
             lfo: Lfo::new(LfoParams::default(), seed),
             activation_id: 0,
@@ -58,7 +71,16 @@ impl Voice {
     pub fn prepare(&mut self, sample_rate: f32, max_block_size: usize) {
         self.sample_rate = sample_rate;
         self.max_block_size = max_block_size;
+        self.gain.configure(sample_rate, PARAM_SMOOTHING_SECONDS);
+        self.pan.configure(sample_rate, PARAM_SMOOTHING_SECONDS);
+        self.pulse_width
+            .configure(sample_rate, PARAM_SMOOTHING_SECONDS);
+        self.lfo_amount
+            .configure(sample_rate, PARAM_SMOOTHING_SECONDS);
         self.generator.prepare(sample_rate, max_block_size);
+        if let Some(next_generator) = self.next_generator.as_mut() {
+            next_generator.prepare(sample_rate, max_block_size);
+        }
         self.amp_env.prepare(sample_rate, max_block_size);
         self.lfo.prepare(sample_rate, max_block_size);
     }
@@ -108,9 +130,15 @@ impl Voice {
     ) {
         self.note = note;
         self.velocity = velocity.clamp(0.0, 1.0);
-        self.gain = generator_params.gain;
-        self.pan = generator_params.pan;
+        self.gain.set_immediate(generator_params.gain);
+        self.pan.set_immediate(generator_params.pan);
+        self.pulse_width.set_immediate(generator_params.pulse_width);
+        self.lfo_amount
+            .set_immediate(Self::effective_lfo_amount(lfo_params));
         self.activation_id = activation_id;
+        self.next_generator = None;
+        self.generator_xfade_pos = 0;
+        self.generator_xfade_len = 0;
 
         if generator_params.kind != self.generator_kind {
             self.generator_kind = generator_params.kind;
@@ -132,6 +160,34 @@ impl Voice {
         self.state = VoiceState::Active;
     }
 
+    /// Applies shared synth parameters to an already-sounding voice.
+    ///
+    /// Continuous parameters are smoothed by [`Voice::next_sample`]. Generator
+    /// kind changes use a short crossfade so discrete waveform changes avoid a
+    /// hard sample discontinuity.
+    pub fn apply_realtime_params(
+        &mut self,
+        generator_params: &GeneratorParams,
+        env_params: &EnvelopeParams,
+        lfo_params: &LfoParams,
+    ) {
+        if self.state == VoiceState::Idle {
+            return;
+        }
+
+        self.gain.set_target(generator_params.gain);
+        self.pan.set_target(generator_params.pan);
+        self.pulse_width.set_target(generator_params.pulse_width);
+        self.lfo_amount
+            .set_target(Self::effective_lfo_amount(lfo_params));
+        self.amp_env.set_params(*env_params);
+        self.lfo.set_params(*lfo_params);
+
+        if generator_params.kind != self.generator_kind {
+            self.start_generator_crossfade(generator_params);
+        }
+    }
+
     /// Starts the release stage if this voice is currently active and
     /// playing `note`.
     pub fn note_off(&mut self, note: u8) {
@@ -150,26 +206,80 @@ impl Voice {
 
         let lfo_value = self.lfo.next_sample();
         let lfo_params = *self.lfo.params();
+        let lfo_amount = self.lfo_amount.tick();
+        let pulse_width = self.pulse_width.tick();
 
         let mut note = self.note as f32;
         if lfo_params.target == LfoTarget::PitchSemitone {
-            note += lfo_value * lfo_params.amount;
+            note += lfo_value * lfo_amount;
         }
-        self.generator.set_frequency_hz(midi_note_to_hz(note));
+        let frequency_hz = midi_note_to_hz(note);
+        self.generator.set_frequency_hz(frequency_hz);
+        self.generator.set_pulse_width(pulse_width);
+        if let Some(next_generator) = self.next_generator.as_mut() {
+            next_generator.set_frequency_hz(frequency_hz);
+            next_generator.set_pulse_width(pulse_width);
+        }
 
         let env = self.amp_env.next_sample();
         if self.amp_env.state() == EnvelopeState::Idle {
             self.state = VoiceState::Idle;
         }
 
-        let mut amplitude = self.generator.next_sample() * env * self.gain * self.velocity;
+        let generator_sample = self.next_generator_sample();
+        let gain = self.gain.tick();
+        let mut amplitude = generator_sample * env * gain * self.velocity;
         if lfo_params.target == LfoTarget::Gain {
-            amplitude *= 1.0 + lfo_value * lfo_params.amount;
+            amplitude *= 1.0 + lfo_value * lfo_amount;
         }
 
-        let pan = self.pan.clamp(-1.0, 1.0);
+        let pan = self.pan.tick().clamp(-1.0, 1.0);
         let angle = (pan + 1.0) * core::f32::consts::FRAC_PI_4;
         (amplitude * angle.cos(), amplitude * angle.sin())
+    }
+
+    fn effective_lfo_amount(params: &LfoParams) -> f32 {
+        if params.enabled && params.target != LfoTarget::None {
+            params.amount
+        } else {
+            0.0
+        }
+    }
+
+    fn start_generator_crossfade(&mut self, params: &GeneratorParams) {
+        self.generator_kind = params.kind;
+        let mut next_generator = GeneratorInstance::from_params(params, self.seed);
+        next_generator.prepare(self.sample_rate, self.max_block_size);
+        next_generator.set_frequency_hz(midi_note_to_hz(self.note as f32));
+        next_generator.set_pulse_width(self.pulse_width.current());
+        next_generator.reset();
+
+        self.next_generator = Some(next_generator);
+        self.generator_xfade_pos = 0;
+        self.generator_xfade_len =
+            ((self.sample_rate * GENERATOR_XFADE_SECONDS).round() as usize).max(1);
+    }
+
+    fn next_generator_sample(&mut self) -> f32 {
+        let current = self.generator.next_sample();
+        let Some(next_generator) = self.next_generator.as_mut() else {
+            return current;
+        };
+
+        let next = next_generator.next_sample();
+        let t = (self.generator_xfade_pos as f32 / self.generator_xfade_len as f32).clamp(0.0, 1.0);
+        let sample = current * (1.0 - t) + next * t;
+
+        self.generator_xfade_pos += 1;
+        if self.generator_xfade_pos >= self.generator_xfade_len {
+            if let Some(next_generator) = self.next_generator.take() {
+                self.generator = next_generator;
+            }
+            self.generator_xfade_pos = 0;
+            self.generator_xfade_len = 0;
+        }
+
+        sample
     }
 }
 

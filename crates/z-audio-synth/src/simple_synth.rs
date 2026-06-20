@@ -34,6 +34,27 @@ fn bool_to_param_value(value: bool) -> f32 {
     if value { 1.0 } else { 0.0 }
 }
 
+fn updates_active_voice(id: ParamId) -> bool {
+    matches!(
+        id,
+        ParamId::GeneratorKind
+            | ParamId::GeneratorGain
+            | ParamId::GeneratorPulseWidth
+            | ParamId::GeneratorPan
+            | ParamId::EnvAttack
+            | ParamId::EnvDecay
+            | ParamId::EnvSustain
+            | ParamId::EnvRelease
+            | ParamId::EnvCurve
+            | ParamId::LfoEnabled
+            | ParamId::LfoWaveform
+            | ParamId::LfoRateHz
+            | ParamId::LfoAmount
+            | ParamId::LfoTarget
+            | ParamId::LfoRetrigger
+    )
+}
+
 /// A fixed-chain simple synthesizer:
 ///
 /// ```text
@@ -103,6 +124,7 @@ impl SimpleSynth {
     /// Selects the oscillator type used by every new note.
     pub fn set_generator_kind(&mut self, kind: GeneratorKind) {
         self.generator_params.kind = kind;
+        self.apply_realtime_voice_params();
     }
 
     /// Returns mutable access to the shared generator parameters (gain,
@@ -114,11 +136,13 @@ impl SimpleSynth {
     /// Replaces the amplitude envelope parameters applied to every new note.
     pub fn set_amp_envelope(&mut self, params: EnvelopeParams) {
         self.amp_env_params = params;
+        self.apply_realtime_voice_params();
     }
 
     /// Replaces the LFO parameters applied to every new note.
     pub fn set_lfo(&mut self, params: LfoParams) {
         self.lfo_params = params;
+        self.apply_realtime_voice_params();
     }
 
     /// Returns mutable access to the 3-band EQ. Band frequency, Q, enabled
@@ -153,14 +177,16 @@ impl SimpleSynth {
     ///
     /// [`ParamId::MaxPolyphony`] is read-only and ignored.
     ///
-    /// Parameter changes affecting envelope/generator/LFO shape apply to
-    /// notes triggered *after* this call; already-sounding voices keep the
-    /// settings they were triggered with. EQ and master-gain changes apply
-    /// immediately (smoothed where applicable).
+    /// Generator gain/pulse-width/pan, envelope, and LFO changes apply to
+    /// already-sounding voices with short smoothing. Generator kind changes
+    /// crossfade on active voices. Generator phase offset still applies to
+    /// newly-triggered notes. EQ and master-gain changes apply immediately
+    /// (smoothed where applicable).
     pub fn set_param(&mut self, id: ParamId, value: f32) {
         let m = id.metadata();
         let clamped = value.clamp(m.min, m.max);
         let flag = value >= 0.5;
+        let update_voices = updates_active_voice(id);
 
         match id {
             ParamId::MasterGain => self.master_gain.set_gain(clamped),
@@ -201,6 +227,16 @@ impl SimpleSynth {
                 self.eq_base_high_freq_hz = clamped;
             }
             ParamId::EqHighType => self.eq.high.kind = ButterworthKind::from_param_value(value),
+            ParamId::EqLowGainDb => self.eq.low.gain_db = clamped,
+            ParamId::EqLowQ => self.eq.low.q = clamped,
+            ParamId::EqMidGainDb => self.eq.mid.gain_db = clamped,
+            ParamId::EqMidQ => self.eq.mid.q = clamped,
+            ParamId::EqHighGainDb => self.eq.high.gain_db = clamped,
+            ParamId::EqHighQ => self.eq.high.q = clamped,
+        }
+
+        if update_voices {
+            self.apply_realtime_voice_params();
         }
     }
 
@@ -235,6 +271,12 @@ impl SimpleSynth {
             ParamId::EqHighEnabled => bool_to_param_value(self.eq.high.enabled),
             ParamId::EqHighFreq => self.eq.high.frequency_hz,
             ParamId::EqHighType => self.eq.high.kind.to_param_value(),
+            ParamId::EqLowGainDb => self.eq.low.gain_db,
+            ParamId::EqLowQ => self.eq.low.q,
+            ParamId::EqMidGainDb => self.eq.mid.gain_db,
+            ParamId::EqMidQ => self.eq.mid.q,
+            ParamId::EqHighGainDb => self.eq.high.gain_db,
+            ParamId::EqHighQ => self.eq.high.q,
         }
     }
 
@@ -315,6 +357,18 @@ impl SimpleSynth {
         (left[0], right[0])
     }
 
+    fn apply_realtime_voice_params(&mut self) {
+        for voice in self.voices.voices_mut() {
+            if voice.is_active() {
+                voice.apply_realtime_params(
+                    &self.generator_params,
+                    &self.amp_env_params,
+                    &self.lfo_params,
+                );
+            }
+        }
+    }
+
     /// Routes voice slot 0's LFO to EQ band-frequency modulation when its
     /// target is one of the `Eq*Freq` variants:
     /// `frequency_hz = base_frequency_hz * 2^(lfo * amount)`.
@@ -365,6 +419,51 @@ mod tests {
             max_block_size: 128,
             max_polyphony: 4,
         })
+    }
+
+    fn render_mean_abs(synth: &mut SimpleSynth, blocks: usize) -> f32 {
+        let mut left = [0.0_f32; 128];
+        let mut right = [0.0_f32; 128];
+        let mut sum = 0.0_f32;
+        let mut count = 0_usize;
+        for _ in 0..blocks {
+            synth.process(&mut left, &mut right);
+            sum += left.iter().map(|sample| sample.abs()).sum::<f32>();
+            count += left.len();
+        }
+        sum / count as f32
+    }
+
+    fn render_mean_signed(synth: &mut SimpleSynth, blocks: usize) -> f32 {
+        let mut left = [0.0_f32; 128];
+        let mut right = [0.0_f32; 128];
+        let mut sum = 0.0_f32;
+        let mut count = 0_usize;
+        for _ in 0..blocks {
+            synth.process(&mut left, &mut right);
+            sum += left.iter().sum::<f32>();
+            count += left.len();
+        }
+        sum / count as f32
+    }
+
+    fn block_rms_values(synth: &mut SimpleSynth, blocks: usize) -> Vec<f32> {
+        let mut left = [0.0_f32; 128];
+        let mut right = [0.0_f32; 128];
+        let mut values = Vec::with_capacity(blocks);
+        for _ in 0..blocks {
+            synth.process(&mut left, &mut right);
+            let sum_sq: f32 = left.iter().map(|sample| sample * sample).sum();
+            values.push((sum_sq / left.len() as f32).sqrt());
+        }
+        values
+    }
+
+    fn max_adjacent_delta(samples: &[f32]) -> f32 {
+        samples
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0_f32, f32::max)
     }
 
     #[test]
@@ -742,8 +841,109 @@ mod tests {
     }
 
     #[test]
+    fn generator_gain_param_affects_active_voice_smoothly() {
+        let mut synth = small_synth();
+        synth.note_on(60, 1.0);
+        let before = render_mean_abs(&mut synth, 20);
+
+        synth.set_param(ParamId::GeneratorGain, 0.0);
+        let after = render_mean_abs(&mut synth, 80);
+
+        assert!(before > 0.1, "before={before}");
+        assert!(after < before * 0.25, "before={before}, after={after}");
+    }
+
+    #[test]
+    fn pulse_width_param_affects_active_pulse_voice() {
+        let mut synth = small_synth();
+        synth.set_param(
+            ParamId::GeneratorKind,
+            GeneratorKind::Pulse.to_param_value(),
+        );
+        synth.note_on(60, 1.0);
+        let before = render_mean_signed(&mut synth, 80);
+
+        synth.set_param(ParamId::GeneratorPulseWidth, 0.1);
+        let after = render_mean_signed(&mut synth, 100);
+
+        assert!(
+            after < before - 0.25,
+            "expected narrower pulse to lower signed mean: before={before}, after={after}"
+        );
+    }
+
+    #[test]
+    fn env_sustain_param_affects_active_voice() {
+        let mut synth = small_synth();
+        synth.set_amp_envelope(EnvelopeParams {
+            attack: 0.001,
+            decay: 0.001,
+            sustain: 1.0,
+            release: 0.1,
+            ..EnvelopeParams::default()
+        });
+        synth.note_on(60, 1.0);
+        let before = render_mean_abs(&mut synth, 30);
+
+        synth.set_param(ParamId::EnvSustain, 0.2);
+        let after = render_mean_abs(&mut synth, 100);
+
+        assert!(before > 0.2, "before={before}");
+        assert!(after < before * 0.45, "before={before}, after={after}");
+    }
+
+    #[test]
+    fn lfo_gain_route_amount_and_rate_affect_active_voice() {
+        let mut synth = small_synth();
+        synth.note_on(60, 1.0);
+        render_mean_abs(&mut synth, 40);
+
+        synth.set_param(ParamId::LfoTarget, LfoTarget::Gain.to_param_value());
+        synth.set_param(ParamId::LfoAmount, 1.0);
+        synth.set_param(ParamId::LfoRateHz, 8.0);
+        let rms = block_rms_values(&mut synth, 160);
+        let min = rms.iter().copied().fold(f32::MAX, f32::min);
+        let max = rms.iter().copied().fold(0.0_f32, f32::max);
+
+        assert!(max > min * 1.8, "min={min}, max={max}");
+    }
+
+    #[test]
+    fn generator_kind_param_crossfades_active_voice_without_large_step() {
+        let mut synth = small_synth();
+        synth.note_on(60, 1.0);
+        let mut left = [0.0_f32; 128];
+        let mut right = [0.0_f32; 128];
+        synth.process(&mut left, &mut right);
+        let last_before = left[127];
+
+        synth.set_param(
+            ParamId::GeneratorKind,
+            GeneratorKind::Triangle.to_param_value(),
+        );
+        synth.process(&mut left, &mut right);
+
+        let mut samples = Vec::with_capacity(129);
+        samples.push(last_before);
+        samples.extend_from_slice(&left);
+        let max_delta = max_adjacent_delta(&samples);
+        assert!(max_delta < 0.25, "max_delta={max_delta}");
+    }
+
+    #[test]
     fn set_param_eq_band_enabled_flags_are_independent() {
         let mut synth = small_synth();
+        // All three bands start disabled (see `ThreeBandButterworthEq::new`);
+        // enable mid/high first so the low-only toggle below actually
+        // exercises independence rather than three already-false flags.
+        synth.set_param(ParamId::EqMidEnabled, 1.0);
+        synth.set_param(ParamId::EqHighEnabled, 1.0);
+
+        synth.set_param(ParamId::EqLowEnabled, 1.0);
+        assert!(synth.eq_mut().low.enabled);
+        assert!(synth.eq_mut().mid.enabled);
+        assert!(synth.eq_mut().high.enabled);
+
         synth.set_param(ParamId::EqLowEnabled, 0.0);
         assert!(!synth.eq_mut().low.enabled);
         assert!(synth.eq_mut().mid.enabled);
