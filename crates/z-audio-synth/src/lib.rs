@@ -9,6 +9,7 @@
 
 #![warn(clippy::all)]
 
+pub mod drums;
 pub mod formula_synth;
 pub mod formula_voice;
 pub mod midi;
@@ -17,6 +18,9 @@ pub mod simple_synth;
 pub mod voice;
 pub mod voice_manager;
 
+pub use drums::{
+    DrumInstrument, DrumKitParams, DrumVoice, DrumVoiceState, FormulaDrumKit, FormulaDrumKitConfig,
+};
 pub use formula_synth::{FormulaSynth, FormulaSynthConfig};
 pub use formula_voice::{FormulaVoice, FormulaVoiceState};
 pub use midi::midi_note_to_hz;

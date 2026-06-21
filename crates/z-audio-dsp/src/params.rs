@@ -125,6 +125,20 @@ pub enum ParamId {
     CompressorDetectorMode = 148,
     CompressorStereoLink = 149,
     CompressorSidechainHpf = 150,
+
+    // --- Formula drum set (160-179) ---
+    DrumKickLevel = 160,
+    DrumSnareLevel = 161,
+    DrumTomLevel = 162,
+    DrumHatLevel = 163,
+    DrumCymbalLevel = 164,
+    DrumTuning = 165,
+    DrumDecay = 166,
+    DrumTone = 167,
+    DrumSnareWire = 168,
+    DrumRoomAmount = 169,
+    DrumStereoWidth = 170,
+    DrumMasterGain = 171,
 }
 
 /// The physical interpretation of a [`ParamMetadata`] value.
@@ -167,7 +181,7 @@ pub struct ParamMetadata {
 
 impl ParamId {
     /// Every [`ParamId`] variant, in declaration order.
-    pub const ALL: [ParamId; 89] = [
+    pub const ALL: [ParamId; 101] = [
         ParamId::MasterGain,
         ParamId::MaxPolyphony,
         ParamId::GeneratorKind,
@@ -257,6 +271,18 @@ impl ParamId {
         ParamId::CompressorDetectorMode,
         ParamId::CompressorStereoLink,
         ParamId::CompressorSidechainHpf,
+        ParamId::DrumKickLevel,
+        ParamId::DrumSnareLevel,
+        ParamId::DrumTomLevel,
+        ParamId::DrumHatLevel,
+        ParamId::DrumCymbalLevel,
+        ParamId::DrumTuning,
+        ParamId::DrumDecay,
+        ParamId::DrumTone,
+        ParamId::DrumSnareWire,
+        ParamId::DrumRoomAmount,
+        ParamId::DrumStereoWidth,
+        ParamId::DrumMasterGain,
     ];
 
     /// Returns this parameter's metadata (name, unit, range, default).
@@ -756,6 +782,18 @@ impl ParamId {
             ParamId::CompressorSidechainHpf => {
                 unit_param(self, "compressor_sidechain_hpf", 0.0, 500.0, 0.0)
             }
+            ParamId::DrumKickLevel => unit_param(self, "drum_kick_level", 0.0, 1.0, 0.90),
+            ParamId::DrumSnareLevel => unit_param(self, "drum_snare_level", 0.0, 1.0, 0.84),
+            ParamId::DrumTomLevel => unit_param(self, "drum_tom_level", 0.0, 1.0, 0.78),
+            ParamId::DrumHatLevel => unit_param(self, "drum_hat_level", 0.0, 1.0, 0.55),
+            ParamId::DrumCymbalLevel => unit_param(self, "drum_cymbal_level", 0.0, 1.0, 0.62),
+            ParamId::DrumTuning => db_param(self, "drum_tuning", -12.0, 12.0, 0.0),
+            ParamId::DrumDecay => unit_param(self, "drum_decay", 0.25, 2.50, 1.0),
+            ParamId::DrumTone => unit_param(self, "drum_tone", 0.0, 1.0, 0.55),
+            ParamId::DrumSnareWire => unit_param(self, "drum_snare_wire", 0.0, 1.0, 0.70),
+            ParamId::DrumRoomAmount => unit_param(self, "drum_room_amount", 0.0, 1.0, 0.18),
+            ParamId::DrumStereoWidth => unit_param(self, "drum_stereo_width", 0.0, 1.0, 0.72),
+            ParamId::DrumMasterGain => db_param(self, "drum_master_gain", -24.0, 12.0, -9.0),
         }
     }
 }
@@ -792,8 +830,8 @@ mod tests {
     use crate::{ButterworthKind, EnvelopeParams, Gain, GeneratorParams, LfoParams};
 
     #[test]
-    fn all_has_89_unique_variants() {
-        assert_eq!(ParamId::ALL.len(), 89);
+    fn all_has_101_unique_variants() {
+        assert_eq!(ParamId::ALL.len(), 101);
         let mut seen = HashSet::new();
         for id in ParamId::ALL {
             assert!(seen.insert(id as u32), "duplicate ParamId in ALL: {id:?}");
