@@ -18,24 +18,43 @@
 
 pub mod buffer;
 pub mod context;
+pub mod delay;
+pub mod dynamics;
 pub mod effects;
+pub mod excitation;
+pub mod formula;
 pub mod generators;
 pub mod math;
 pub mod modulators;
 pub mod params;
+pub mod resonators;
+pub mod reverb;
 
 pub use buffer::AudioBuffer;
 pub use context::{EventKind, ProcessContext, SignalRate, TimedEvent};
+pub use delay::{AllpassDelay, DelayLine};
+pub use dynamics::{
+    BallisticsFilter, Compressor, CompressorParams, DetectorMode, LevelDetector, Limiter,
+    LimiterParams, compressor_gain_db, limiter_gain_db,
+};
 pub use effects::{BUTTERWORTH_Q, ButterworthBand, ButterworthKind, Gain, ThreeBandButterworthEq};
+pub use excitation::HammerExciter;
+pub use formula::{
+    FORMULA_MACRO_COUNT, FORMULA_STACK_SIZE, FormulaGenerator, FormulaMacroMetadata, FormulaOpcode,
+    FormulaParams, FormulaProgram, FormulaProgramId, FormulaRuntime, builtin_program,
+    builtin_programs,
+};
 pub use generators::{
     AnalogGenerator, AnalogWaveform, GeneratorInstance, GeneratorKind, GeneratorParams,
     NoiseGenerator,
 };
-pub use math::{flush_denormal, midi_note_to_hz};
+pub use math::{db_to_linear, flush_denormal, linear_to_db, midi_note_to_hz};
 pub use modulators::{
     Envelope, EnvelopeCurve, EnvelopeParams, EnvelopeState, Lfo, LfoParams, LfoTarget, LfoWaveform,
 };
 pub use params::{ParamId, ParamMetadata, ParamUnit};
+pub use resonators::{BiquadResonator, BodyResonator, ModalBank, ModalMode};
+pub use reverb::{ParametricReverb, ParametricReverbParams};
 
 /// Produces an audio-rate mono signal (oscillators, noise sources, etc.).
 pub trait Generator {

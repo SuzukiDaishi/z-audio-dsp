@@ -13,6 +13,11 @@ pub const BUTTERWORTH_Q: f32 = FRAC_1_SQRT_2;
 
 /// Time constant for frequency-change smoothing, in seconds.
 const FREQ_SMOOTHING_TAU: f32 = 0.02;
+/// Time constant for gain, Q, and bypass smoothing, in seconds.
+const PARAM_SMOOTHING_TAU: f32 = 0.006;
+/// Crossfade length for discrete filter-shape changes, in seconds.
+const KIND_XFADE_SECONDS: f32 = 0.006;
+const WET_EPSILON: f32 = 1.0e-4;
 
 /// Valid range for [`ButterworthBand::frequency_hz`] on the low band, also
 /// used as [`crate::params::ParamId::EqLowFreq`]'s metadata range.
@@ -68,9 +73,9 @@ impl ButterworthKind {
 /// Fields are read every sample by the EQ's [`Effect::process_stereo`]
 /// implementation, so they can be mutated directly (e.g.
 /// `eq.low.frequency_hz = 180.0;`) without any extra setter calls. Frequency
-/// changes are smoothed internally to avoid zipper noise; `enabled` toggles
-/// take effect immediately but produce an identity (passthrough) filter, so
-/// they do not click.
+/// changes are smoothed internally to avoid zipper noise. `enabled` changes
+/// crossfade between dry and filtered signal, and filter-shape changes use a
+/// short crossfade to avoid hard discontinuities while audio is running.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ButterworthBand {
     pub enabled: bool,
@@ -84,30 +89,65 @@ pub struct ButterworthBand {
 /// user-facing [`ButterworthBand`] configuration.
 struct BandState {
     smoothed_freq: SmoothedParam,
+    smoothed_q: SmoothedParam,
+    smoothed_gain_db: SmoothedParam,
+    wet: SmoothedParam,
     biquad: Biquad,
+    fading_biquad: Option<Biquad>,
+    active_kind: ButterworthKind,
+    kind_xfade_pos: usize,
+    kind_xfade_len: usize,
     min_freq_hz: f32,
     max_freq_hz: f32,
+    initialized: bool,
 }
 
 impl BandState {
-    fn new(initial_freq_hz: f32, (min_freq_hz, max_freq_hz): (f32, f32)) -> Self {
+    fn new(
+        initial_freq_hz: f32,
+        initial_kind: ButterworthKind,
+        (min_freq_hz, max_freq_hz): (f32, f32),
+    ) -> Self {
         let mut smoothed_freq = SmoothedParam::new(initial_freq_hz);
         smoothed_freq.configure(48_000.0, FREQ_SMOOTHING_TAU);
+        let mut smoothed_q = SmoothedParam::new(BUTTERWORTH_Q);
+        smoothed_q.configure(48_000.0, PARAM_SMOOTHING_TAU);
+        let mut smoothed_gain_db = SmoothedParam::new(0.0);
+        smoothed_gain_db.configure(48_000.0, PARAM_SMOOTHING_TAU);
+        let mut wet = SmoothedParam::new(0.0);
+        wet.configure(48_000.0, PARAM_SMOOTHING_TAU);
         Self {
             smoothed_freq,
+            smoothed_q,
+            smoothed_gain_db,
+            wet,
             biquad: Biquad::identity(),
+            fading_biquad: None,
+            active_kind: initial_kind,
+            kind_xfade_pos: 0,
+            kind_xfade_len: 0,
             min_freq_hz,
             max_freq_hz,
+            initialized: false,
         }
     }
 
     fn prepare(&mut self, sample_rate: f32) {
         self.smoothed_freq
             .configure(sample_rate, FREQ_SMOOTHING_TAU);
+        self.smoothed_q.configure(sample_rate, PARAM_SMOOTHING_TAU);
+        self.smoothed_gain_db
+            .configure(sample_rate, PARAM_SMOOTHING_TAU);
+        self.wet.configure(sample_rate, PARAM_SMOOTHING_TAU);
+        self.initialized = false;
     }
 
     fn reset(&mut self) {
         self.biquad.reset_state();
+        self.fading_biquad = None;
+        self.kind_xfade_pos = 0;
+        self.kind_xfade_len = 0;
+        self.initialized = false;
     }
 
     /// Updates smoothing/coefficients from `params` and processes one
@@ -119,28 +159,123 @@ impl BandState {
         left: f32,
         right: f32,
     ) -> (f32, f32) {
-        if !params.enabled {
+        let target_freq = params
+            .frequency_hz
+            .clamp(self.min_freq_hz, self.max_freq_hz);
+        let target_q = params.q.clamp(EQ_Q_RANGE.0, EQ_Q_RANGE.1);
+        let target_gain_db = params.gain_db.clamp(EQ_GAIN_DB_RANGE.0, EQ_GAIN_DB_RANGE.1);
+        let target_wet = if params.enabled { 1.0 } else { 0.0 };
+
+        if !self.initialized {
+            self.smoothed_freq.set_immediate(target_freq);
+            self.smoothed_q.set_immediate(target_q);
+            self.smoothed_gain_db.set_immediate(target_gain_db);
+            self.wet.set_immediate(target_wet);
+            self.active_kind = params.kind;
+            self.fading_biquad = None;
+            self.kind_xfade_pos = 0;
+            self.kind_xfade_len = 0;
+            self.initialized = true;
+        } else {
+            self.smoothed_freq.set_target(target_freq);
+            self.smoothed_q.set_target(target_q);
+            self.smoothed_gain_db.set_target(target_gain_db);
+            self.wet.set_target(target_wet);
+            self.update_kind(params.kind, sample_rate);
+        }
+
+        if self.wet.target() <= WET_EPSILON && self.wet.current() <= WET_EPSILON {
+            self.smoothed_freq.set_immediate(target_freq);
+            self.smoothed_q.set_immediate(target_q);
+            self.smoothed_gain_db.set_immediate(target_gain_db);
+            self.active_kind = params.kind;
             self.biquad.reset_state();
+            self.fading_biquad = None;
+            self.kind_xfade_pos = 0;
+            self.kind_xfade_len = 0;
             return (left, right);
         }
 
-        let target = params
-            .frequency_hz
-            .clamp(self.min_freq_hz, self.max_freq_hz);
-        self.smoothed_freq.set_target(target);
         let freq = self.smoothed_freq.tick().min(sample_rate * 0.45);
+        let q = self.smoothed_q.tick();
+        let gain = db_to_gain(self.smoothed_gain_db.tick());
+        let wet = self.wet.tick().clamp(0.0, 1.0);
 
-        let q = params.q.clamp(EQ_Q_RANGE.0, EQ_Q_RANGE.1);
-        let (b0, b1, b2, a1, a2) = match params.kind {
-            ButterworthKind::LowPass => lowpass_coefficients(freq, q, sample_rate),
-            ButterworthKind::BandPass => bandpass_coefficients(freq, q, sample_rate),
-            ButterworthKind::HighPass => highpass_coefficients(freq, q, sample_rate),
-        };
-        self.biquad.set_coefficients(b0, b1, b2, a1, a2);
-        let gain = db_to_gain(params.gain_db.clamp(EQ_GAIN_DB_RANGE.0, EQ_GAIN_DB_RANGE.1));
-        let (out_l, out_r) = self.biquad.process(left, right);
-        (out_l * gain, out_r * gain)
+        set_biquad_coefficients(&mut self.biquad, self.active_kind, freq, q, sample_rate);
+        let (wet_l, wet_r) = self.process_wet(left, right);
+        let filtered_l = wet_l * gain;
+        let filtered_r = wet_r * gain;
+        let dry = 1.0 - wet;
+
+        if self.wet.target() <= WET_EPSILON && wet <= WET_EPSILON {
+            self.wet.set_immediate(0.0);
+            self.biquad.reset_state();
+            self.fading_biquad = None;
+        }
+
+        (
+            left.mul_add(dry, filtered_l * wet),
+            right.mul_add(dry, filtered_r * wet),
+        )
     }
+
+    fn update_kind(&mut self, target_kind: ButterworthKind, sample_rate: f32) {
+        if self.active_kind == target_kind {
+            return;
+        }
+
+        if self.wet.current() <= WET_EPSILON {
+            self.active_kind = target_kind;
+            self.biquad.reset_state();
+            self.fading_biquad = None;
+            self.kind_xfade_pos = 0;
+            self.kind_xfade_len = 0;
+            return;
+        }
+
+        self.fading_biquad = Some(self.biquad);
+        self.active_kind = target_kind;
+        self.biquad.reset_state();
+        self.kind_xfade_pos = 0;
+        self.kind_xfade_len = ((sample_rate * KIND_XFADE_SECONDS).round() as usize).max(1);
+    }
+
+    fn process_wet(&mut self, left: f32, right: f32) -> (f32, f32) {
+        let (new_l, new_r) = self.biquad.process(left, right);
+        let Some(fading_biquad) = self.fading_biquad.as_mut() else {
+            return (new_l, new_r);
+        };
+
+        let (old_l, old_r) = fading_biquad.process(left, right);
+        let t = (self.kind_xfade_pos as f32 / self.kind_xfade_len as f32).clamp(0.0, 1.0);
+        let old_gain = 1.0 - t;
+        let out_l = old_l.mul_add(old_gain, new_l * t);
+        let out_r = old_r.mul_add(old_gain, new_r * t);
+
+        self.kind_xfade_pos += 1;
+        if self.kind_xfade_pos >= self.kind_xfade_len {
+            self.fading_biquad = None;
+            self.kind_xfade_pos = 0;
+            self.kind_xfade_len = 0;
+        }
+
+        (out_l, out_r)
+    }
+}
+
+fn set_biquad_coefficients(
+    biquad: &mut Biquad,
+    kind: ButterworthKind,
+    freq: f32,
+    q: f32,
+    sample_rate: f32,
+) {
+    let (b0, b1, b2, a1, a2) = match kind {
+        ButterworthKind::LowPass => lowpass_coefficients(freq, q, sample_rate),
+        ButterworthKind::BandPass => bandpass_coefficients(freq, q, sample_rate),
+        ButterworthKind::HighPass => highpass_coefficients(freq, q, sample_rate),
+    };
+    biquad.set_coefficients(b0, b1, b2, a1, a2);
 }
 
 fn db_to_gain(db: f32) -> f32 {
@@ -194,9 +329,21 @@ impl ThreeBandButterworthEq {
                 gain_db: 0.0,
                 q: BUTTERWORTH_Q,
             },
-            low_state: BandState::new(DEFAULT_LOW_FREQ_HZ, LOW_FREQ_RANGE),
-            mid_state: BandState::new(DEFAULT_MID_FREQ_HZ, MID_FREQ_RANGE),
-            high_state: BandState::new(DEFAULT_HIGH_FREQ_HZ, HIGH_FREQ_RANGE),
+            low_state: BandState::new(
+                DEFAULT_LOW_FREQ_HZ,
+                ButterworthKind::LowPass,
+                LOW_FREQ_RANGE,
+            ),
+            mid_state: BandState::new(
+                DEFAULT_MID_FREQ_HZ,
+                ButterworthKind::BandPass,
+                MID_FREQ_RANGE,
+            ),
+            high_state: BandState::new(
+                DEFAULT_HIGH_FREQ_HZ,
+                ButterworthKind::HighPass,
+                HIGH_FREQ_RANGE,
+            ),
             sample_rate: 48_000.0,
         }
     }
@@ -256,6 +403,20 @@ mod tests {
     fn rms(samples: &[f32]) -> f32 {
         let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
         (sum_sq / samples.len() as f32).sqrt()
+    }
+
+    fn process_one(eq: &mut ThreeBandButterworthEq, sample: f32) -> f32 {
+        let mut left = [sample];
+        let mut right = [sample];
+        process(eq, &mut left, &mut right);
+        left[0]
+    }
+
+    fn max_adjacent_delta(samples: &[f32]) -> f32 {
+        samples
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0_f32, f32::max)
     }
 
     #[test]
@@ -433,6 +594,87 @@ mod tests {
     }
 
     #[test]
+    fn gain_q_and_bypass_changes_are_smoothed_while_running() {
+        let mut eq = ThreeBandButterworthEq::new();
+        eq.mid.enabled = true;
+        eq.prepare(48_000.0, 128);
+
+        for sample in sine_signal(1_000.0, 48_000.0, 2048) {
+            process_one(&mut eq, sample);
+        }
+
+        eq.mid.gain_db = 24.0;
+        process_one(&mut eq, 0.25);
+        assert!(
+            eq.mid_state.smoothed_gain_db.current() < 1.0,
+            "gain jumped to {} dB",
+            eq.mid_state.smoothed_gain_db.current()
+        );
+
+        eq.mid.q = 10.0;
+        process_one(&mut eq, 0.25);
+        assert!(
+            eq.mid_state.smoothed_q.current() < 1.0,
+            "Q jumped to {}",
+            eq.mid_state.smoothed_q.current()
+        );
+
+        eq.mid.enabled = false;
+        process_one(&mut eq, 0.25);
+        assert!(
+            eq.mid_state.wet.current() > 0.9,
+            "bypass jumped to wet={}",
+            eq.mid_state.wet.current()
+        );
+    }
+
+    #[test]
+    fn filter_kind_changes_crossfade_while_running() {
+        let mut eq = ThreeBandButterworthEq::new();
+        eq.mid.enabled = true;
+        eq.mid.kind = ButterworthKind::BandPass;
+        eq.prepare(48_000.0, 128);
+
+        for sample in sine_signal(1_000.0, 48_000.0, 2048) {
+            process_one(&mut eq, sample);
+        }
+
+        eq.mid.kind = ButterworthKind::HighPass;
+        process_one(&mut eq, 0.25);
+
+        assert_eq!(eq.mid_state.active_kind, ButterworthKind::HighPass);
+        assert!(eq.mid_state.fading_biquad.is_some());
+        assert!(eq.mid_state.kind_xfade_len > 1);
+    }
+
+    #[test]
+    fn abrupt_eq_changes_do_not_create_large_sample_steps() {
+        let mut eq = ThreeBandButterworthEq::new();
+        eq.low.enabled = true;
+        eq.low.kind = ButterworthKind::LowPass;
+        eq.prepare(48_000.0, 128);
+
+        for _ in 0..4096 {
+            process_one(&mut eq, 0.2);
+        }
+
+        let mut samples = Vec::with_capacity(257);
+        samples.push(process_one(&mut eq, 0.2));
+
+        eq.low.kind = ButterworthKind::HighPass;
+        eq.low.gain_db = 24.0;
+        eq.low.q = 10.0;
+        eq.low.enabled = false;
+
+        for _ in 0..256 {
+            samples.push(process_one(&mut eq, 0.2));
+        }
+
+        let max_delta = max_adjacent_delta(&samples);
+        assert!(max_delta < 0.2, "max_delta={max_delta}");
+    }
+
+    #[test]
     fn stable_and_finite_at_multiple_sample_rates() {
         for &sample_rate in &[44_100.0_f32, 48_000.0, 96_000.0] {
             let mut eq = ThreeBandButterworthEq::new();
@@ -524,6 +766,7 @@ mod tests {
     #[test]
     fn frequency_change_is_smoothed_not_instant() {
         let mut eq = ThreeBandButterworthEq::new();
+        eq.low.enabled = true;
         eq.mid.enabled = false;
         eq.high.enabled = false;
         eq.prepare(48_000.0, 128);

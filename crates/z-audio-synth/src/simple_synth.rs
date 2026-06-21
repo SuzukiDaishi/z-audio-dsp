@@ -233,6 +233,7 @@ impl SimpleSynth {
             ParamId::EqMidQ => self.eq.mid.q = clamped,
             ParamId::EqHighGainDb => self.eq.high.gain_db = clamped,
             ParamId::EqHighQ => self.eq.high.q = clamped,
+            _ => {}
         }
 
         if update_voices {
@@ -277,6 +278,7 @@ impl SimpleSynth {
             ParamId::EqMidQ => self.eq.mid.q,
             ParamId::EqHighGainDb => self.eq.high.gain_db,
             ParamId::EqHighQ => self.eq.high.q,
+            _ => id.metadata().default,
         }
     }
 
@@ -616,7 +618,7 @@ mod tests {
     #[test]
     fn set_param_then_param_value_round_trips_defaults_for_all_params() {
         let mut synth = SimpleSynth::new(SimpleSynthConfig::default());
-        for id in ParamId::ALL {
+        for id in simple_synth_param_ids() {
             let m = id.metadata();
             synth.set_param(id, m.default);
             assert_eq!(synth.param_value(id), m.default, "param: {}", m.name);
@@ -626,7 +628,7 @@ mod tests {
     #[test]
     fn set_param_clamps_continuous_value_below_minimum() {
         let mut synth = SimpleSynth::new(SimpleSynthConfig::default());
-        for id in ParamId::ALL {
+        for id in simple_synth_param_ids() {
             let m = id.metadata();
             if m.step_count.is_some() || id == ParamId::MaxPolyphony {
                 continue;
@@ -639,7 +641,7 @@ mod tests {
     #[test]
     fn set_param_clamps_continuous_value_above_maximum() {
         let mut synth = SimpleSynth::new(SimpleSynthConfig::default());
-        for id in ParamId::ALL {
+        for id in simple_synth_param_ids() {
             let m = id.metadata();
             if m.step_count.is_some() || id == ParamId::MaxPolyphony {
                 continue;
@@ -652,7 +654,7 @@ mod tests {
     #[test]
     fn set_param_enum_value_rounds_to_nearest_and_clamps() {
         let mut synth = SimpleSynth::new(SimpleSynthConfig::default());
-        for id in ParamId::ALL {
+        for id in simple_synth_param_ids() {
             let m = id.metadata();
             if m.unit != ParamUnit::Enum {
                 continue;
@@ -679,7 +681,7 @@ mod tests {
     #[test]
     fn set_param_boolean_value_threshold_at_half() {
         let mut synth = SimpleSynth::new(SimpleSynthConfig::default());
-        for id in ParamId::ALL {
+        for id in simple_synth_param_ids() {
             let m = id.metadata();
             if m.unit != ParamUnit::Boolean {
                 continue;
@@ -1019,5 +1021,46 @@ mod tests {
         synth.process_with_context(&ctx, &mut left, &mut right);
 
         assert_eq!(synth.eq_mut().low.frequency_hz, 500.0);
+    }
+
+    fn simple_synth_param_ids() -> impl Iterator<Item = ParamId> {
+        ParamId::ALL.into_iter().filter(|id| {
+            matches!(
+                id,
+                ParamId::MasterGain
+                    | ParamId::MaxPolyphony
+                    | ParamId::GeneratorKind
+                    | ParamId::GeneratorGain
+                    | ParamId::GeneratorPulseWidth
+                    | ParamId::GeneratorPhaseOffset
+                    | ParamId::GeneratorPan
+                    | ParamId::EnvAttack
+                    | ParamId::EnvDecay
+                    | ParamId::EnvSustain
+                    | ParamId::EnvRelease
+                    | ParamId::EnvCurve
+                    | ParamId::LfoEnabled
+                    | ParamId::LfoWaveform
+                    | ParamId::LfoRateHz
+                    | ParamId::LfoAmount
+                    | ParamId::LfoTarget
+                    | ParamId::LfoRetrigger
+                    | ParamId::EqLowEnabled
+                    | ParamId::EqLowFreq
+                    | ParamId::EqLowType
+                    | ParamId::EqMidEnabled
+                    | ParamId::EqMidFreq
+                    | ParamId::EqMidType
+                    | ParamId::EqHighEnabled
+                    | ParamId::EqHighFreq
+                    | ParamId::EqHighType
+                    | ParamId::EqLowGainDb
+                    | ParamId::EqLowQ
+                    | ParamId::EqMidGainDb
+                    | ParamId::EqMidQ
+                    | ParamId::EqHighGainDb
+                    | ParamId::EqHighQ
+            )
+        })
     }
 }

@@ -59,6 +59,72 @@ pub enum ParamId {
     EqMidQ = 52,
     EqHighGainDb = 53,
     EqHighQ = 54,
+
+    // --- Formula synth (60-79) ---
+    FormulaProgram = 60,
+    FormulaMacro1 = 61,
+    FormulaMacro2 = 62,
+    FormulaMacro3 = 63,
+    FormulaMacro4 = 64,
+    FormulaMacro5 = 65,
+    FormulaMacro6 = 66,
+    FormulaMacro7 = 67,
+    FormulaMacro8 = 68,
+    FormulaOutputGain = 69,
+    FormulaOversampling = 70,
+    FormulaDcBlock = 71,
+
+    // --- Formula piano (80-99) ---
+    PianoTone = 80,
+    PianoBrightness = 81,
+    PianoHammerHardness = 82,
+    PianoHammerNoise = 83,
+    PianoInharmonicity = 84,
+    PianoDecay = 85,
+    PianoRelease = 86,
+    PianoBodyAmount = 87,
+    PianoStereoWidth = 88,
+    PianoSympatheticAmount = 89,
+    PianoPedalResonance = 90,
+    PianoMasterGain = 91,
+
+    // --- Parametric reverb (100-119) ---
+    ReverbMix = 100,
+    ReverbRoomSize = 101,
+    ReverbDecay = 102,
+    ReverbPreDelay = 103,
+    ReverbDiffusion = 104,
+    ReverbDamping = 105,
+    ReverbLowCut = 106,
+    ReverbHighCut = 107,
+    ReverbModRate = 108,
+    ReverbModDepth = 109,
+    ReverbWidth = 110,
+    ReverbEarlyLateMix = 111,
+    ReverbOutputGain = 112,
+
+    // --- Limiter (120-139) ---
+    LimiterInputGain = 120,
+    LimiterThreshold = 121,
+    LimiterCeiling = 122,
+    LimiterRelease = 123,
+    LimiterLookahead = 124,
+    LimiterStereoLink = 125,
+    LimiterTruePeak = 126,
+    LimiterOutputGain = 127,
+
+    // --- Compressor (140-159) ---
+    CompressorInputGain = 140,
+    CompressorThreshold = 141,
+    CompressorRatio = 142,
+    CompressorKnee = 143,
+    CompressorAttack = 144,
+    CompressorRelease = 145,
+    CompressorMakeupGain = 146,
+    CompressorMix = 147,
+    CompressorDetectorMode = 148,
+    CompressorStereoLink = 149,
+    CompressorSidechainHpf = 150,
 }
 
 /// The physical interpretation of a [`ParamMetadata`] value.
@@ -101,7 +167,7 @@ pub struct ParamMetadata {
 
 impl ParamId {
     /// Every [`ParamId`] variant, in declaration order.
-    pub const ALL: [ParamId; 33] = [
+    pub const ALL: [ParamId; 89] = [
         ParamId::MasterGain,
         ParamId::MaxPolyphony,
         ParamId::GeneratorKind,
@@ -135,6 +201,62 @@ impl ParamId {
         ParamId::EqMidQ,
         ParamId::EqHighGainDb,
         ParamId::EqHighQ,
+        ParamId::FormulaProgram,
+        ParamId::FormulaMacro1,
+        ParamId::FormulaMacro2,
+        ParamId::FormulaMacro3,
+        ParamId::FormulaMacro4,
+        ParamId::FormulaMacro5,
+        ParamId::FormulaMacro6,
+        ParamId::FormulaMacro7,
+        ParamId::FormulaMacro8,
+        ParamId::FormulaOutputGain,
+        ParamId::FormulaOversampling,
+        ParamId::FormulaDcBlock,
+        ParamId::PianoTone,
+        ParamId::PianoBrightness,
+        ParamId::PianoHammerHardness,
+        ParamId::PianoHammerNoise,
+        ParamId::PianoInharmonicity,
+        ParamId::PianoDecay,
+        ParamId::PianoRelease,
+        ParamId::PianoBodyAmount,
+        ParamId::PianoStereoWidth,
+        ParamId::PianoSympatheticAmount,
+        ParamId::PianoPedalResonance,
+        ParamId::PianoMasterGain,
+        ParamId::ReverbMix,
+        ParamId::ReverbRoomSize,
+        ParamId::ReverbDecay,
+        ParamId::ReverbPreDelay,
+        ParamId::ReverbDiffusion,
+        ParamId::ReverbDamping,
+        ParamId::ReverbLowCut,
+        ParamId::ReverbHighCut,
+        ParamId::ReverbModRate,
+        ParamId::ReverbModDepth,
+        ParamId::ReverbWidth,
+        ParamId::ReverbEarlyLateMix,
+        ParamId::ReverbOutputGain,
+        ParamId::LimiterInputGain,
+        ParamId::LimiterThreshold,
+        ParamId::LimiterCeiling,
+        ParamId::LimiterRelease,
+        ParamId::LimiterLookahead,
+        ParamId::LimiterStereoLink,
+        ParamId::LimiterTruePeak,
+        ParamId::LimiterOutputGain,
+        ParamId::CompressorInputGain,
+        ParamId::CompressorThreshold,
+        ParamId::CompressorRatio,
+        ParamId::CompressorKnee,
+        ParamId::CompressorAttack,
+        ParamId::CompressorRelease,
+        ParamId::CompressorMakeupGain,
+        ParamId::CompressorMix,
+        ParamId::CompressorDetectorMode,
+        ParamId::CompressorStereoLink,
+        ParamId::CompressorSidechainHpf,
     ];
 
     /// Returns this parameter's metadata (name, unit, range, default).
@@ -437,7 +559,228 @@ impl ParamId {
                 default: crate::BUTTERWORTH_Q,
                 step_count: None,
             },
+            ParamId::FormulaProgram => ParamMetadata {
+                id: self,
+                name: "formula_program",
+                unit: ParamUnit::Enum,
+                min: 0.0,
+                max: (crate::FormulaProgramId::VARIANT_COUNT - 1) as f32,
+                default: crate::FormulaProgramId::default().to_param_value(),
+                step_count: Some(crate::FormulaProgramId::VARIANT_COUNT),
+            },
+            ParamId::FormulaMacro1
+            | ParamId::FormulaMacro2
+            | ParamId::FormulaMacro3
+            | ParamId::FormulaMacro4
+            | ParamId::FormulaMacro5
+            | ParamId::FormulaMacro6
+            | ParamId::FormulaMacro7
+            | ParamId::FormulaMacro8 => ParamMetadata {
+                id: self,
+                name: match self {
+                    ParamId::FormulaMacro1 => "formula_macro_1",
+                    ParamId::FormulaMacro2 => "formula_macro_2",
+                    ParamId::FormulaMacro3 => "formula_macro_3",
+                    ParamId::FormulaMacro4 => "formula_macro_4",
+                    ParamId::FormulaMacro5 => "formula_macro_5",
+                    ParamId::FormulaMacro6 => "formula_macro_6",
+                    ParamId::FormulaMacro7 => "formula_macro_7",
+                    _ => "formula_macro_8",
+                },
+                unit: ParamUnit::Linear,
+                min: 0.0,
+                max: 1.0,
+                default: 0.0,
+                step_count: None,
+            },
+            ParamId::FormulaOutputGain => ParamMetadata {
+                id: self,
+                name: "formula_output_gain",
+                unit: ParamUnit::Linear,
+                min: -24.0,
+                max: 24.0,
+                default: -6.0,
+                step_count: None,
+            },
+            ParamId::FormulaOversampling => ParamMetadata {
+                id: self,
+                name: "formula_oversampling",
+                unit: ParamUnit::Enum,
+                min: 0.0,
+                max: 2.0,
+                default: 0.0,
+                step_count: Some(3),
+            },
+            ParamId::FormulaDcBlock => ParamMetadata {
+                id: self,
+                name: "formula_dc_block",
+                unit: ParamUnit::Boolean,
+                min: 0.0,
+                max: 1.0,
+                default: 1.0,
+                step_count: Some(2),
+            },
+            ParamId::PianoTone => unit_param(self, "piano_tone", 0.0, 1.0, 0.5),
+            ParamId::PianoBrightness => unit_param(self, "piano_brightness", 0.0, 1.0, 0.55),
+            ParamId::PianoHammerHardness => {
+                unit_param(self, "piano_hammer_hardness", 0.0, 1.0, 0.55)
+            }
+            ParamId::PianoHammerNoise => unit_param(self, "piano_hammer_noise", 0.0, 1.0, 0.08),
+            ParamId::PianoInharmonicity => unit_param(self, "piano_inharmonicity", 0.0, 1.0, 0.45),
+            ParamId::PianoDecay => ParamMetadata {
+                id: self,
+                name: "piano_decay",
+                unit: ParamUnit::Seconds,
+                min: 0.2,
+                max: 8.0,
+                default: 2.4,
+                step_count: None,
+            },
+            ParamId::PianoRelease => ParamMetadata {
+                id: self,
+                name: "piano_release",
+                unit: ParamUnit::Seconds,
+                min: 0.05,
+                max: 5.0,
+                default: 0.8,
+                step_count: None,
+            },
+            ParamId::PianoBodyAmount => unit_param(self, "piano_body_amount", 0.0, 1.0, 0.08),
+            ParamId::PianoStereoWidth => unit_param(self, "piano_stereo_width", 0.0, 1.0, 0.75),
+            ParamId::PianoSympatheticAmount => {
+                unit_param(self, "piano_sympathetic_amount", 0.0, 1.0, 0.0)
+            }
+            ParamId::PianoPedalResonance => {
+                unit_param(self, "piano_pedal_resonance", 0.0, 1.0, 0.0)
+            }
+            ParamId::PianoMasterGain => ParamMetadata {
+                id: self,
+                name: "piano_master_gain",
+                unit: ParamUnit::Linear,
+                min: -24.0,
+                max: 12.0,
+                default: -6.0,
+                step_count: None,
+            },
+            ParamId::ReverbMix => unit_param(self, "reverb_mix", 0.0, 1.0, 0.35),
+            ParamId::ReverbRoomSize => unit_param(self, "reverb_room_size", 0.0, 1.0, 0.55),
+            ParamId::ReverbDecay => ParamMetadata {
+                id: self,
+                name: "reverb_decay",
+                unit: ParamUnit::Seconds,
+                min: 0.1,
+                max: 20.0,
+                default: 2.2,
+                step_count: None,
+            },
+            ParamId::ReverbPreDelay => unit_param(self, "reverb_pre_delay", 0.0, 250.0, 18.0),
+            ParamId::ReverbDiffusion => unit_param(self, "reverb_diffusion", 0.0, 1.0, 0.65),
+            ParamId::ReverbDamping => unit_param(self, "reverb_damping", 0.0, 1.0, 0.35),
+            ParamId::ReverbLowCut => ParamMetadata {
+                id: self,
+                name: "reverb_low_cut",
+                unit: ParamUnit::Hertz,
+                min: 20.0,
+                max: 1000.0,
+                default: 80.0,
+                step_count: None,
+            },
+            ParamId::ReverbHighCut => ParamMetadata {
+                id: self,
+                name: "reverb_high_cut",
+                unit: ParamUnit::Hertz,
+                min: 1000.0,
+                max: 20_000.0,
+                default: 12_000.0,
+                step_count: None,
+            },
+            ParamId::ReverbModRate => ParamMetadata {
+                id: self,
+                name: "reverb_mod_rate",
+                unit: ParamUnit::Hertz,
+                min: 0.0,
+                max: 2.0,
+                default: 0.0,
+                step_count: None,
+            },
+            ParamId::ReverbModDepth => unit_param(self, "reverb_mod_depth", 0.0, 1.0, 0.0),
+            ParamId::ReverbWidth => unit_param(self, "reverb_width", 0.0, 1.0, 0.9),
+            ParamId::ReverbEarlyLateMix => {
+                unit_param(self, "reverb_early_late_mix", 0.0, 1.0, 0.35)
+            }
+            ParamId::ReverbOutputGain => db_param(self, "reverb_output_gain", -24.0, 24.0, 0.0),
+            ParamId::LimiterInputGain => db_param(self, "limiter_input_gain", -24.0, 24.0, 0.0),
+            ParamId::LimiterThreshold => db_param(self, "limiter_threshold", -24.0, 0.0, -0.1),
+            ParamId::LimiterCeiling => db_param(self, "limiter_ceiling", -24.0, 0.0, -0.1),
+            ParamId::LimiterRelease => unit_param(self, "limiter_release", 1.0, 1000.0, 80.0),
+            ParamId::LimiterLookahead => unit_param(self, "limiter_lookahead", 0.0, 10.0, 3.0),
+            ParamId::LimiterStereoLink => unit_param(self, "limiter_stereo_link", 0.0, 1.0, 1.0),
+            ParamId::LimiterTruePeak => ParamMetadata {
+                id: self,
+                name: "limiter_true_peak",
+                unit: ParamUnit::Boolean,
+                min: 0.0,
+                max: 1.0,
+                default: 0.0,
+                step_count: Some(2),
+            },
+            ParamId::LimiterOutputGain => db_param(self, "limiter_output_gain", -24.0, 24.0, 0.0),
+            ParamId::CompressorInputGain => {
+                db_param(self, "compressor_input_gain", -24.0, 24.0, 0.0)
+            }
+            ParamId::CompressorThreshold => {
+                db_param(self, "compressor_threshold", -60.0, 0.0, -18.0)
+            }
+            ParamId::CompressorRatio => unit_param(self, "compressor_ratio", 1.0, 20.0, 4.0),
+            ParamId::CompressorKnee => unit_param(self, "compressor_knee", 0.0, 24.0, 0.0),
+            ParamId::CompressorAttack => unit_param(self, "compressor_attack", 0.1, 200.0, 10.0),
+            ParamId::CompressorRelease => {
+                unit_param(self, "compressor_release", 5.0, 2000.0, 120.0)
+            }
+            ParamId::CompressorMakeupGain => {
+                db_param(self, "compressor_makeup_gain", -24.0, 24.0, 0.0)
+            }
+            ParamId::CompressorMix => unit_param(self, "compressor_mix", 0.0, 1.0, 1.0),
+            ParamId::CompressorDetectorMode => ParamMetadata {
+                id: self,
+                name: "compressor_detector_mode",
+                unit: ParamUnit::Enum,
+                min: 0.0,
+                max: (crate::DetectorMode::VARIANT_COUNT - 1) as f32,
+                default: crate::DetectorMode::default().to_param_value(),
+                step_count: Some(crate::DetectorMode::VARIANT_COUNT),
+            },
+            ParamId::CompressorStereoLink => {
+                unit_param(self, "compressor_stereo_link", 0.0, 1.0, 1.0)
+            }
+            ParamId::CompressorSidechainHpf => {
+                unit_param(self, "compressor_sidechain_hpf", 0.0, 500.0, 0.0)
+            }
         }
+    }
+}
+
+fn unit_param(id: ParamId, name: &'static str, min: f32, max: f32, default: f32) -> ParamMetadata {
+    ParamMetadata {
+        id,
+        name,
+        unit: ParamUnit::Linear,
+        min,
+        max,
+        default,
+        step_count: None,
+    }
+}
+
+fn db_param(id: ParamId, name: &'static str, min: f32, max: f32, default: f32) -> ParamMetadata {
+    ParamMetadata {
+        id,
+        name,
+        unit: ParamUnit::Linear,
+        min,
+        max,
+        default,
+        step_count: None,
     }
 }
 
@@ -449,8 +792,8 @@ mod tests {
     use crate::{ButterworthKind, EnvelopeParams, Gain, GeneratorParams, LfoParams};
 
     #[test]
-    fn all_has_33_unique_variants() {
-        assert_eq!(ParamId::ALL.len(), 33);
+    fn all_has_89_unique_variants() {
+        assert_eq!(ParamId::ALL.len(), 89);
         let mut seen = HashSet::new();
         for id in ParamId::ALL {
             assert!(seen.insert(id as u32), "duplicate ParamId in ALL: {id:?}");

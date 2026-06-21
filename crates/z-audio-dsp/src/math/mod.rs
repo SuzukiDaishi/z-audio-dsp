@@ -24,6 +24,17 @@ pub fn flush_denormal(x: f32) -> f32 {
     if x.abs() < 1.0e-20 { 0.0 } else { x }
 }
 
+/// Converts decibels to a linear amplitude multiplier.
+pub fn db_to_linear(db: f32) -> f32 {
+    10.0_f32.powf(db / 20.0)
+}
+
+/// Converts a linear amplitude value to decibels, clamping silence to a
+/// practical floor to keep dynamics processors numerically stable.
+pub fn linear_to_db(linear: f32) -> f32 {
+    20.0 * linear.abs().max(1.0e-12).log10()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -45,5 +56,16 @@ mod tests {
         assert_eq!(flush_denormal(1.0e-25), 0.0);
         assert_eq!(flush_denormal(1.0), 1.0);
         assert_eq!(flush_denormal(-1.0e-25), 0.0);
+    }
+
+    #[test]
+    fn db_linear_round_trip() {
+        for db in [-60.0_f32, -12.0, 0.0, 6.0, 24.0] {
+            let round_trip = linear_to_db(db_to_linear(db));
+            assert!(
+                (round_trip - db).abs() < 1.0e-4,
+                "db={db}, got={round_trip}"
+            );
+        }
     }
 }
