@@ -104,6 +104,28 @@ enum Stage {
     Release,
 }
 
+/// A note-on/note-off request captured while [`SamplerVoice::force_retrigger`]
+/// fades out a voice that's being stolen; applied once that fade reaches
+/// silence so the new sound never starts with an audible step.
+struct PendingTrigger {
+    sample_rate: f32,
+    activation_id: u64,
+    region: Arc<SampleRegion>,
+    note: u8,
+    velocity01: f32,
+    gain_scale: f32,
+    release_time_scale: f32,
+}
+
+/// How quickly a stolen voice is faded out before the new sound replaces it.
+/// Long enough to be inaudible as a click, short enough not to noticeably
+/// delay the new note.
+const STEAL_KILL_SECONDS: f32 = 0.006;
+/// How long the tail of a sample is faded out before it ends, so a sample
+/// that's truncated (or otherwise doesn't decay to silence on its own)
+/// doesn't produce an audible click when playback reaches its last frame.
+const END_OF_SAMPLE_FADE_SECONDS: f32 = 0.015;
+
 struct SamplerVoice {
     region: Option<Arc<SampleRegion>>,
     note: u8,
@@ -120,6 +142,7 @@ struct SamplerVoice {
     release_rate: f32,
     activation_id: u64,
     active: bool,
+    pending: Option<PendingTrigger>,
 }
 
 impl SamplerVoice {
@@ -140,6 +163,7 @@ impl SamplerVoice {
             release_rate: 1.0,
             activation_id: 0,
             active: false,
+            pending: None,
         }
     }
 
@@ -151,6 +175,71 @@ impl SamplerVoice {
         if self.active && !self.is_release_voice && self.stage != Stage::Release {
             self.stage = Stage::Release;
         }
+    }
+
+    /// Starts playing `pending` immediately, discarding whatever this voice
+    /// was doing. Only safe to call on a voice that is silent (inactive, or
+    /// whose envelope has just faded to zero); otherwise use
+    /// [`SamplerVoice::force_retrigger`] to avoid a click.
+    fn start(&mut self, pending: PendingTrigger) {
+        let PendingTrigger {
+            sample_rate,
+            activation_id,
+            region,
+            note,
+            velocity01,
+            gain_scale,
+            release_time_scale,
+        } = pending;
+
+        let note_hz = midi_note_to_hz(note as f32 + region.tune_cents / 100.0);
+        let root_hz = midi_note_to_hz(region.pitch_keycenter as f32);
+        let pitch_ratio =
+            (note_hz / root_hz) as f64 * (region.sample.sample_rate() / sample_rate) as f64;
+
+        let veltrack = region.amp_veltrack.clamp(0.0, 1.0);
+        let vel_gain = (1.0 - veltrack + veltrack * velocity01.clamp(0.0, 1.0)).max(0.0);
+
+        self.is_release_voice = region.trigger == TriggerKind::Release;
+        self.note = note;
+        self.position = region.offset_frames as f64;
+        self.pitch_ratio = pitch_ratio.max(1.0e-6);
+        self.base_gain = db_to_linear(region.volume_db) * vel_gain * gain_scale;
+        self.env = 0.0;
+        self.attack_rate = 1.0 / (region.ampeg_attack.max(0.001) * sample_rate);
+        self.has_decay = region.ampeg_decay > 0.0;
+        if self.has_decay {
+            let sustain = region.ampeg_sustain.clamp(0.0, 1.0);
+            self.decay_rate = (1.0 - sustain) / (region.ampeg_decay.max(0.001) * sample_rate);
+            self.sustain_level = sustain;
+        } else {
+            self.decay_rate = 0.0;
+            self.sustain_level = 1.0;
+        }
+        let release_seconds =
+            (region.ampeg_release.max(0.01) * release_time_scale.max(0.01)).max(0.01);
+        self.release_rate = 1.0 / (release_seconds * sample_rate);
+        self.stage = Stage::Attack;
+        self.activation_id = activation_id;
+        self.active = true;
+        self.pending = None;
+        self.region = Some(region);
+    }
+
+    /// Starts playing `pending`, fading this voice out first over
+    /// [`STEAL_KILL_SECONDS`] if it's currently sounding, instead of cutting
+    /// it off mid-sample (which produces an audible click/pop).
+    fn force_retrigger(&mut self, sample_rate: f32, pending: PendingTrigger) {
+        if !self.active {
+            self.start(pending);
+            return;
+        }
+        let kill_rate = 1.0 / (STEAL_KILL_SECONDS * sample_rate);
+        if self.stage != Stage::Release || self.release_rate < kill_rate {
+            self.stage = Stage::Release;
+            self.release_rate = kill_rate;
+        }
+        self.pending = Some(pending);
     }
 
     #[inline]
@@ -166,6 +255,9 @@ impl SamplerVoice {
         let idx = self.position as usize;
         if frames < 2 || idx + 1 >= frames {
             self.active = false;
+            if let Some(pending) = self.pending.take() {
+                self.start(pending);
+            }
             return (0.0, 0.0);
         }
         let frac = (self.position - idx as f64) as f32;
@@ -173,6 +265,14 @@ impl SamplerVoice {
         let (l1, r1) = region.sample.frame(idx + 1);
         let l = l0 + (l1 - l0) * frac;
         let r = r0 + (r1 - r0) * frac;
+
+        let fade_frames = ((region.sample.sample_rate() * END_OF_SAMPLE_FADE_SECONDS) as usize).max(1);
+        let remaining = frames - 1 - idx;
+        let end_fade = if remaining < fade_frames {
+            remaining as f32 / fade_frames as f32
+        } else {
+            1.0
+        };
 
         match self.stage {
             Stage::Attack => {
@@ -199,13 +299,16 @@ impl SamplerVoice {
                 if self.env <= 0.0005 {
                     self.env = 0.0;
                     self.active = false;
+                    if let Some(pending) = self.pending.take() {
+                        self.start(pending);
+                    }
                 }
             }
             Stage::Idle => {}
         }
 
         self.position += self.pitch_ratio;
-        let gain = flush_denormal(self.env * self.base_gain);
+        let gain = flush_denormal(self.env * self.base_gain * end_fade);
         (flush_denormal(l * gain), flush_denormal(r * gain))
     }
 }
@@ -267,39 +370,16 @@ impl SamplerEngine {
     ) {
         let index = self.find_voice_slot();
         self.next_activation_id = self.next_activation_id.wrapping_add(1);
-        let sample_rate = self.sample_rate;
-        let voice = &mut self.voices[index];
-
-        let note_hz = midi_note_to_hz(note as f32 + region.tune_cents / 100.0);
-        let root_hz = midi_note_to_hz(region.pitch_keycenter as f32);
-        let pitch_ratio =
-            (note_hz / root_hz) as f64 * (region.sample.sample_rate() / sample_rate) as f64;
-
-        let veltrack = region.amp_veltrack.clamp(0.0, 1.0);
-        let vel_gain = (1.0 - veltrack + veltrack * velocity01.clamp(0.0, 1.0)).max(0.0);
-
-        voice.is_release_voice = region.trigger == TriggerKind::Release;
-        voice.note = note;
-        voice.position = region.offset_frames as f64;
-        voice.pitch_ratio = pitch_ratio.max(1.0e-6);
-        voice.base_gain = db_to_linear(region.volume_db) * vel_gain * gain_scale;
-        voice.env = 0.0;
-        voice.attack_rate = 1.0 / (region.ampeg_attack.max(0.001) * sample_rate);
-        voice.has_decay = region.ampeg_decay > 0.0;
-        if voice.has_decay {
-            let sustain = region.ampeg_sustain.clamp(0.0, 1.0);
-            voice.decay_rate = (1.0 - sustain) / (region.ampeg_decay.max(0.001) * sample_rate);
-            voice.sustain_level = sustain;
-        } else {
-            voice.decay_rate = 0.0;
-            voice.sustain_level = 1.0;
-        }
-        let release_seconds = (region.ampeg_release.max(0.01) * release_time_scale.max(0.01)).max(0.01);
-        voice.release_rate = 1.0 / (release_seconds * sample_rate);
-        voice.stage = Stage::Attack;
-        voice.activation_id = self.next_activation_id;
-        voice.active = true;
-        voice.region = Some(region);
+        let pending = PendingTrigger {
+            sample_rate: self.sample_rate,
+            activation_id: self.next_activation_id,
+            region,
+            note,
+            velocity01,
+            gain_scale,
+            release_time_scale,
+        };
+        self.voices[index].force_retrigger(self.sample_rate, pending);
     }
 
     /// Begins the release fade for any active attack-trigger voice(s)
@@ -471,6 +551,72 @@ mod tests {
         let mut right = [0.0_f32; 64];
         engine.process(&mut left, &mut right);
         assert!(left.iter().chain(right.iter()).all(|s| s.is_finite()));
+        assert_eq!(engine.active_voice_count(), 0);
+    }
+
+    fn max_step(samples: &[f32]) -> f32 {
+        samples
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0_f32, f32::max)
+    }
+
+    #[test]
+    fn stealing_a_loud_voice_does_not_click() {
+        // One voice slot; the region's data ramps up to full scale (+1.0),
+        // so stealing it mid-playback with no fade would produce a large
+        // sample-to-sample jump back toward the new voice's near-zero
+        // attack start.
+        let mut engine = SamplerEngine::new(SamplerEngineConfig {
+            sample_rate: 48_000.0,
+            max_voices: 1,
+        });
+        let r = region(TriggerKind::Attack, 60, 60, 60, 480_000);
+        engine.trigger(r, 60, 1.0, 1.0, 1.0);
+
+        // Run the first voice well past its attack ramp so it's at full
+        // volume and playing loud (non-silent) material.
+        let mut left = [0.0_f32; 4096];
+        let mut right = [0.0_f32; 4096];
+        engine.process(&mut left, &mut right);
+        assert!(max_step(&left) < 0.05, "warm-up should already be smooth");
+
+        // Steal the only voice with a new note while the old one is loud.
+        let r2 = region(TriggerKind::Attack, 67, 67, 67, 480_000);
+        engine.trigger(r2, 67, 1.0, 1.0, 1.0);
+
+        let mut steal_left = [0.0_f32; 2048];
+        let mut steal_right = [0.0_f32; 2048];
+        engine.process(&mut steal_left, &mut steal_right);
+        assert!(steal_left.iter().chain(steal_right.iter()).all(|s| s.is_finite()));
+        assert!(
+            max_step(&steal_left) < 0.05,
+            "stealing a loud voice should fade, not jump: max_step={}",
+            max_step(&steal_left)
+        );
+    }
+
+    #[test]
+    fn sample_end_fades_out_instead_of_clicking() {
+        // `region()`'s data ramps linearly up to +1.0 right at the last
+        // frame, i.e. playback would otherwise hit full scale then cut to
+        // silence in a single sample without the end-of-sample fade.
+        let mut engine = SamplerEngine::new(SamplerEngineConfig {
+            sample_rate: 48_000.0,
+            max_voices: 1,
+        });
+        let r = region(TriggerKind::Attack, 60, 60, 60, 2048);
+        engine.trigger(r, 60, 1.0, 1.0, 1.0);
+
+        let mut left = [0.0_f32; 2048];
+        let mut right = [0.0_f32; 2048];
+        engine.process(&mut left, &mut right);
+        assert!(left.iter().chain(right.iter()).all(|s| s.is_finite()));
+        assert!(
+            max_step(&left) < 0.1,
+            "sample end should fade, not cut: max_step={}",
+            max_step(&left)
+        );
         assert_eq!(engine.active_voice_count(), 0);
     }
 }
