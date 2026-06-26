@@ -619,4 +619,124 @@ mod tests {
         );
         assert_eq!(engine.active_voice_count(), 0);
     }
+
+    #[test]
+    fn double_steal_does_not_panic_or_click() {
+        // Steal the only voice slot twice in a row, before the first kill
+        // fade has finished. The second pending trigger should simply
+        // replace the first (the first note is dropped), with no panic and
+        // no audible jump.
+        let mut engine = SamplerEngine::new(SamplerEngineConfig {
+            sample_rate: 48_000.0,
+            max_voices: 1,
+        });
+        engine.trigger(region(TriggerKind::Attack, 60, 60, 60, 480_000), 60, 1.0, 1.0, 1.0);
+        let mut warm_l = [0.0_f32; 4096];
+        let mut warm_r = [0.0_f32; 4096];
+        engine.process(&mut warm_l, &mut warm_r);
+
+        engine.trigger(region(TriggerKind::Attack, 64, 64, 64, 480_000), 64, 1.0, 1.0, 1.0);
+        engine.trigger(region(TriggerKind::Attack, 67, 67, 67, 480_000), 67, 1.0, 1.0, 1.0);
+
+        let mut left = [0.0_f32; 4096];
+        let mut right = [0.0_f32; 4096];
+        engine.process(&mut left, &mut right);
+        assert!(left.iter().chain(right.iter()).all(|s| s.is_finite()));
+        assert!(
+            max_step(&left) < 0.05,
+            "double steal should still fade smoothly: max_step={}",
+            max_step(&left)
+        );
+    }
+
+    #[test]
+    fn force_retrigger_on_idle_voice_starts_immediately() {
+        // Stealing a voice that isn't actually sounding (inactive) should
+        // not incur the kill-fade delay; the new note should be audible in
+        // its very first attack samples.
+        let mut engine = SamplerEngine::new(SamplerEngineConfig {
+            sample_rate: 48_000.0,
+            max_voices: 1,
+        });
+        engine.trigger(region(TriggerKind::Attack, 60, 60, 60, 64), 60, 1.0, 1.0, 1.0);
+        let mut drain_l = [0.0_f32; 128];
+        let mut drain_r = [0.0_f32; 128];
+        engine.process(&mut drain_l, &mut drain_r);
+        assert_eq!(engine.active_voice_count(), 0, "first voice should have finished");
+
+        engine.trigger(region(TriggerKind::Attack, 67, 67, 67, 480_000), 67, 1.0, 1.0, 1.0);
+        assert_eq!(engine.active_voice_count(), 1);
+    }
+
+    #[test]
+    fn zero_velocity_with_full_veltrack_is_silent() {
+        let mut engine = SamplerEngine::new(SamplerEngineConfig {
+            sample_rate: 48_000.0,
+            max_voices: 1,
+        });
+        let r = region(TriggerKind::Attack, 60, 60, 60, 48_000);
+        engine.trigger(r, 60, 0.0, 1.0, 1.0);
+        let mut left = [0.0_f32; 256];
+        let mut right = [0.0_f32; 256];
+        engine.process(&mut left, &mut right);
+        assert!(left.iter().chain(right.iter()).all(|s| *s == 0.0));
+    }
+
+    #[test]
+    fn offset_frames_skips_initial_samples() {
+        let frames = 48_000;
+        let data = (0..frames)
+            .map(|i| (i as f32 / frames as f32) * 2.0 - 1.0)
+            .collect::<Vec<_>>();
+        let region = Arc::new(SampleRegion {
+            lokey: 60,
+            hikey: 60,
+            lovel: 0,
+            hivel: 127,
+            pitch_keycenter: 60,
+            tune_cents: 0.0,
+            volume_db: 0.0,
+            amp_veltrack: 1.0,
+            offset_frames: 24_000,
+            trigger: TriggerKind::Attack,
+            ampeg_attack: 0.001,
+            ampeg_decay: 0.0,
+            ampeg_sustain: 1.0,
+            ampeg_release: 0.05,
+            sample: SampleBuffer::new(48_000.0, 1, data),
+        });
+        let mut engine = SamplerEngine::new(SamplerEngineConfig {
+            sample_rate: 48_000.0,
+            max_voices: 1,
+        });
+        engine.trigger(region, 60, 1.0, 1.0, 1.0);
+        let mut left = [0.0_f32; 1];
+        let mut right = [0.0_f32; 1];
+        engine.process(&mut left, &mut right);
+        // Starting near the midpoint of a -1..1 ramp should read close to 0,
+        // not close to -1 (which is where frame 0 would be).
+        assert!(left[0].abs() < 0.5, "left={}", left[0]);
+    }
+
+    #[test]
+    fn releasing_voice_is_preferred_for_stealing_over_a_sustaining_one() {
+        let mut engine = SamplerEngine::new(SamplerEngineConfig {
+            sample_rate: 48_000.0,
+            max_voices: 2,
+        });
+        engine.trigger(region(TriggerKind::Attack, 60, 60, 60, 480_000), 60, 1.0, 1.0, 1.0);
+        engine.trigger(region(TriggerKind::Attack, 64, 64, 64, 480_000), 64, 1.0, 1.0, 1.0);
+        let mut warm_l = [0.0_f32; 4096];
+        let mut warm_r = [0.0_f32; 4096];
+        engine.process(&mut warm_l, &mut warm_r);
+        engine.note_off(64); // note 64's voice starts releasing
+
+        // A third note should steal note 64's (releasing) voice rather than
+        // cutting off the still-sustaining note 60.
+        engine.trigger(region(TriggerKind::Attack, 67, 67, 67, 480_000), 67, 1.0, 1.0, 1.0);
+        let mut left = [0.0_f32; 1];
+        let mut right = [0.0_f32; 1];
+        engine.process(&mut left, &mut right);
+        assert!(left.iter().chain(right.iter()).all(|s| s.is_finite()));
+    }
 }

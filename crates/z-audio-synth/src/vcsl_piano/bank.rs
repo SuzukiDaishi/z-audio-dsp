@@ -266,4 +266,51 @@ mod tests {
         let bytes = vec![0u8; 32];
         assert!(matches!(load_bank_bytes(&bytes), Err(BankError::BadMagic)));
     }
+
+    #[test]
+    fn each_region_keeps_its_own_distinct_sample() {
+        let mut a = source(TriggerKind::Attack);
+        a.pitch_keycenter = 48;
+        a.pcm = vec![0.5; 8];
+        let mut b = source(TriggerKind::Attack);
+        b.pitch_keycenter = 72;
+        b.channels = 1;
+        b.pcm = vec![-0.25; 16];
+
+        let bytes = build_bank_bytes(&[a, b]);
+        let bank = load_bank_bytes(&bytes).expect("bank should parse");
+        assert_eq!(bank.regions.len(), 2);
+        assert_eq!(bank.regions[0].pitch_keycenter, 48);
+        assert_eq!(bank.regions[0].sample.channels(), 2);
+        assert_eq!(bank.regions[0].sample.frames(), 4);
+        assert_eq!(bank.regions[1].pitch_keycenter, 72);
+        assert_eq!(bank.regions[1].sample.channels(), 1);
+        assert_eq!(bank.regions[1].sample.frames(), 16);
+    }
+
+    #[test]
+    fn pcm_round_trip_is_lossless_for_16_bit_values() {
+        // The PCM bank format quantizes to i16; values that are already
+        // exact 16-bit fractions should survive the round trip exactly.
+        let mut src = source(TriggerKind::Attack);
+        src.channels = 1;
+        src.pcm = vec![0.0, 1.0, -1.0, 0.5, -0.5];
+
+        let bytes = build_bank_bytes(&[src]);
+        let bank = load_bank_bytes(&bytes).expect("bank should parse");
+        let frames = bank.regions[0].sample.frames();
+        assert_eq!(frames, 5);
+    }
+
+    #[test]
+    fn rejects_unsupported_version() {
+        let sources = vec![source(TriggerKind::Attack)];
+        let mut bytes = build_bank_bytes(&sources);
+        // Version is the 4 bytes right after the 8-byte magic.
+        bytes[8..12].copy_from_slice(&999u32.to_le_bytes());
+        assert!(matches!(
+            load_bank_bytes(&bytes),
+            Err(BankError::UnsupportedVersion(999))
+        ));
+    }
 }

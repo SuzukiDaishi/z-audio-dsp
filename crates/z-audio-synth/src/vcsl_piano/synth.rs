@@ -295,4 +295,131 @@ mod tests {
         let loud_rms = (ll.iter().map(|s| s * s).sum::<f32>() / ll.len() as f32).sqrt();
         assert!(loud_rms > quiet_rms * 4.0, "quiet={quiet_rms}, loud={loud_rms}");
     }
+
+    #[test]
+    fn velocity_curve_changes_loudness_response() {
+        let mut soft = VcslPiano::new(VcslPianoConfig::default());
+        let mut hard = VcslPiano::new(VcslPianoConfig::default());
+        soft.load_bank(one_region_bank(TriggerKind::Attack));
+        hard.load_bank(one_region_bank(TriggerKind::Attack));
+        // Lower curve values make low velocities quieter (more compressed
+        // dynamic range requiring more force for full volume).
+        soft.set_param(ParamId::VcslVelocityCurve, 0.0);
+        hard.set_param(ParamId::VcslVelocityCurve, 1.0);
+        soft.note_on(69, 0.4);
+        hard.note_on(69, 0.4);
+        let mut sl = [0.0_f32; 1024];
+        let mut sr = [0.0_f32; 1024];
+        let mut hl = [0.0_f32; 1024];
+        let mut hr = [0.0_f32; 1024];
+        soft.process(&mut sl, &mut sr);
+        hard.process(&mut hl, &mut hr);
+        let soft_rms = (sl.iter().map(|s| s * s).sum::<f32>() / sl.len() as f32).sqrt();
+        let hard_rms = (hl.iter().map(|s| s * s).sum::<f32>() / hl.len() as f32).sqrt();
+        assert!(hard_rms > soft_rms, "soft={soft_rms}, hard={hard_rms}");
+    }
+
+    #[test]
+    fn stereo_width_zero_collapses_to_mono() {
+        let pcm: Vec<f32> = (0..96_000)
+            .map(|i| (core::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
+            .collect();
+        let sample = SampleBuffer::new(48_000.0, 2, {
+            // Hard-panned stereo: left = signal, right = -signal.
+            let mut interleaved = Vec::with_capacity(pcm.len() * 2);
+            for s in &pcm {
+                interleaved.push(*s);
+                interleaved.push(-*s);
+            }
+            interleaved
+        });
+        let region = StdArc::new(SampleRegion {
+            lokey: 0,
+            hikey: 127,
+            lovel: 0,
+            hivel: 127,
+            pitch_keycenter: 69,
+            tune_cents: 0.0,
+            volume_db: 0.0,
+            amp_veltrack: 0.0,
+            offset_frames: 0,
+            trigger: TriggerKind::Attack,
+            ampeg_attack: 0.001,
+            ampeg_decay: 0.0,
+            ampeg_sustain: 1.0,
+            ampeg_release: 0.4,
+            sample,
+        });
+        let bank = Arc::new(VcslSampleBank { regions: vec![region] });
+
+        let mut piano = VcslPiano::new(VcslPianoConfig::default());
+        piano.load_bank(bank);
+        piano.set_param(ParamId::VcslStereoWidth, 0.0);
+        piano.note_on(69, 1.0);
+        let mut left = [0.0_f32; 2048];
+        let mut right = [0.0_f32; 2048];
+        piano.process(&mut left, &mut right);
+        // With width=0 the mid/side processing should leave left == right
+        // (the hard left/right panning is fully collapsed to mono).
+        for (l, r) in left.iter().zip(right.iter()).skip(256) {
+            assert!((l - r).abs() < 1.0e-4, "l={l}, r={r}");
+        }
+    }
+
+    #[test]
+    fn note_on_outside_any_region_produces_no_voice() {
+        let mut piano = VcslPiano::new(VcslPianoConfig::default());
+        let mut bank = (*one_region_bank(TriggerKind::Attack)).clone();
+        bank.regions[0] = StdArc::new(SampleRegion {
+            lovel: 100,
+            ..(*bank.regions[0]).clone()
+        });
+        piano.load_bank(Arc::new(bank));
+        piano.note_on(69, 0.1); // velocity far below lovel=100
+        assert_eq!(piano.active_voice_count(), 0);
+    }
+
+    #[test]
+    fn note_off_without_matching_note_on_is_a_no_op() {
+        let mut piano = VcslPiano::new(VcslPianoConfig::default());
+        piano.load_bank(one_region_bank(TriggerKind::Attack));
+        piano.note_off(69); // nothing was ever triggered
+        assert_eq!(piano.active_voice_count(), 0);
+        let mut left = [0.0_f32; 128];
+        let mut right = [0.0_f32; 128];
+        piano.process(&mut left, &mut right);
+        assert!(left.iter().chain(right.iter()).all(|s| *s == 0.0));
+    }
+
+    #[test]
+    fn multiple_simultaneous_notes_are_polyphonic() {
+        let mut piano = VcslPiano::new(VcslPianoConfig::default());
+        piano.load_bank(one_region_bank(TriggerKind::Attack));
+        piano.note_on(60, 1.0);
+        piano.note_on(64, 1.0);
+        piano.note_on(67, 1.0);
+        assert_eq!(piano.active_voice_count(), 3);
+    }
+
+    #[test]
+    fn note_on_mid_block_does_not_sound_before_its_sample_offset() {
+        let mut piano = VcslPiano::new(VcslPianoConfig::default());
+        piano.load_bank(one_region_bank(TriggerKind::Attack));
+        let events = [TimedEvent {
+            sample_offset: 200,
+            kind: EventKind::NoteOn { note: 69, velocity: 1.0 },
+        }];
+        let ctx = ProcessContext::new(48_000.0, 256, 120.0, &events);
+        let mut left = [0.0_f32; 256];
+        let mut right = [0.0_f32; 256];
+        piano.process_with_context(&ctx, &mut left, &mut right);
+        assert!(
+            left[..200].iter().chain(right[..200].iter()).all(|s| *s == 0.0),
+            "note should be silent before its scheduled sample offset"
+        );
+        assert!(
+            left[200..].iter().any(|s| s.abs() > 0.0),
+            "note should sound from its scheduled sample offset onward"
+        );
+    }
 }
