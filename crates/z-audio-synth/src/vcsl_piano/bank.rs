@@ -60,7 +60,9 @@ impl fmt::Display for BankError {
 impl std::error::Error for BankError {}
 
 const MAGIC: &[u8; 8] = b"VCSLBANK";
-const VERSION: u32 = 1;
+/// Version 2 stores PCM as 16-bit integers (the source FLACs are 16-bit, so
+/// this is lossless) instead of f32, roughly halving bank size on disk.
+const VERSION: u32 = 2;
 
 /// Serializes `sources` into the on-disk bank format.
 pub fn build_bank_bytes(sources: &[VcslRegionSource]) -> Vec<u8> {
@@ -77,7 +79,8 @@ pub fn build_bank_bytes(sources: &[VcslRegionSource]) -> Vec<u8> {
         out.push(channels);
         out.extend_from_slice(&(frame_count as u32).to_le_bytes());
         for s in &src.pcm {
-            out.extend_from_slice(&s.to_le_bytes());
+            let quantized = (s.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
+            out.extend_from_slice(&quantized.to_le_bytes());
         }
     }
 
@@ -131,6 +134,10 @@ impl<'a> Cursor<'a> {
     fn f32(&mut self) -> Result<f32, BankError> {
         Ok(f32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
+
+    fn i16(&mut self) -> Result<i16, BankError> {
+        Ok(i16::from_le_bytes(self.take(2)?.try_into().unwrap()))
+    }
 }
 
 /// Parses a bank previously written by [`build_bank_bytes`].
@@ -152,10 +159,9 @@ pub fn load_bank_bytes(bytes: &[u8]) -> Result<VcslSampleBank, BankError> {
         let channels = cursor.u8()?;
         let frame_count = cursor.u32()? as usize;
         let total = frame_count * channels.max(1) as usize;
-        let pcm_bytes = cursor.take(total * 4)?;
         let mut pcm = Vec::with_capacity(total);
-        for chunk in pcm_bytes.chunks_exact(4) {
-            pcm.push(f32::from_le_bytes(chunk.try_into().unwrap()));
+        for _ in 0..total {
+            pcm.push(cursor.i16()? as f32 / i16::MAX as f32);
         }
         samples.push(SampleBuffer::new(sample_rate, channels, pcm));
     }
