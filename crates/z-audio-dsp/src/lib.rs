@@ -29,6 +29,7 @@ pub mod modulators;
 pub mod params;
 pub mod resonators;
 pub mod reverb;
+pub mod sampler;
 
 pub use buffer::AudioBuffer;
 pub use context::{EventKind, ProcessContext, SignalRate, TimedEvent};
@@ -55,6 +56,7 @@ pub use modulators::{
 pub use params::{ParamId, ParamMetadata, ParamUnit};
 pub use resonators::{BiquadResonator, BodyResonator, ModalBank, ModalMode};
 pub use reverb::{ParametricReverb, ParametricReverbParams};
+pub use sampler::{SampleBuffer, SampleRegion, SamplerEngine, SamplerEngineConfig, TriggerKind};
 
 /// Produces an audio-rate mono signal (oscillators, noise sources, etc.).
 pub trait Generator {

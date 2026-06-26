@@ -139,6 +139,14 @@ pub enum ParamId {
     DrumRoomAmount = 169,
     DrumStereoWidth = 170,
     DrumMasterGain = 171,
+
+    // --- VCSL sampler piano (180-199) ---
+    VcslMasterGain = 180,
+    VcslTone = 181,
+    VcslVelocityCurve = 182,
+    VcslReleaseLevel = 183,
+    VcslReleaseTime = 184,
+    VcslStereoWidth = 185,
 }
 
 /// The physical interpretation of a [`ParamMetadata`] value.
@@ -181,7 +189,7 @@ pub struct ParamMetadata {
 
 impl ParamId {
     /// Every [`ParamId`] variant, in declaration order.
-    pub const ALL: [ParamId; 101] = [
+    pub const ALL: [ParamId; 107] = [
         ParamId::MasterGain,
         ParamId::MaxPolyphony,
         ParamId::GeneratorKind,
@@ -283,6 +291,12 @@ impl ParamId {
         ParamId::DrumRoomAmount,
         ParamId::DrumStereoWidth,
         ParamId::DrumMasterGain,
+        ParamId::VcslMasterGain,
+        ParamId::VcslTone,
+        ParamId::VcslVelocityCurve,
+        ParamId::VcslReleaseLevel,
+        ParamId::VcslReleaseTime,
+        ParamId::VcslStereoWidth,
     ];
 
     /// Returns this parameter's metadata (name, unit, range, default).
@@ -794,6 +808,20 @@ impl ParamId {
             ParamId::DrumRoomAmount => unit_param(self, "drum_room_amount", 0.0, 1.0, 0.18),
             ParamId::DrumStereoWidth => unit_param(self, "drum_stereo_width", 0.0, 1.0, 0.72),
             ParamId::DrumMasterGain => db_param(self, "drum_master_gain", -24.0, 12.0, -9.0),
+            ParamId::VcslMasterGain => db_param(self, "vcsl_master_gain", -24.0, 12.0, 0.0),
+            ParamId::VcslTone => unit_param(self, "vcsl_tone", 0.0, 1.0, 1.0),
+            ParamId::VcslVelocityCurve => unit_param(self, "vcsl_velocity_curve", 0.0, 1.0, 0.5),
+            ParamId::VcslReleaseLevel => db_param(self, "vcsl_release_level", -24.0, 12.0, 0.0),
+            ParamId::VcslReleaseTime => ParamMetadata {
+                id: self,
+                name: "vcsl_release_time",
+                unit: ParamUnit::Seconds,
+                min: 0.05,
+                max: 5.0,
+                default: 0.35,
+                step_count: None,
+            },
+            ParamId::VcslStereoWidth => unit_param(self, "vcsl_stereo_width", 0.0, 1.0, 1.0),
         }
     }
 }
@@ -831,7 +859,7 @@ mod tests {
 
     #[test]
     fn all_has_101_unique_variants() {
-        assert_eq!(ParamId::ALL.len(), 101);
+        assert_eq!(ParamId::ALL.len(), 107);
         let mut seen = HashSet::new();
         for id in ParamId::ALL {
             assert!(seen.insert(id as u32), "duplicate ParamId in ALL: {id:?}");
