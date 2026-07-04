@@ -5,7 +5,10 @@ pub mod biquad;
 pub mod interpolation;
 pub mod smoothing;
 
-pub use biquad::{Biquad, bandpass_coefficients, highpass_coefficients, lowpass_coefficients};
+pub use biquad::{
+    Biquad, bandpass_coefficients, high_shelf_coefficients, highpass_coefficients,
+    low_shelf_coefficients, lowpass_coefficients, peaking_eq_coefficients,
+};
 pub use interpolation::{clamp, lerp};
 pub use smoothing::SmoothedParam;
 

@@ -12,6 +12,7 @@
 pub mod drums;
 pub mod formula_synth;
 pub mod formula_voice;
+pub mod generic_sampler;
 pub mod midi;
 pub mod piano;
 pub mod simple_synth;
@@ -24,6 +25,10 @@ pub use drums::{
 };
 pub use formula_synth::{FormulaSynth, FormulaSynthConfig};
 pub use formula_voice::{FormulaVoice, FormulaVoiceState};
+pub use generic_sampler::{
+    GenericSampler, GenericSamplerConfig, GenericSamplerParams, SamplerBank,
+    build_bank_bytes as build_sampler_bank_bytes, load_bank_bytes as load_sampler_bank_bytes,
+};
 pub use midi::midi_note_to_hz;
 pub use piano::{FormulaPiano, FormulaPianoConfig, PianoParams, PianoVoice, PianoVoiceState};
 pub use simple_synth::{SimpleSynth, SimpleSynthConfig};

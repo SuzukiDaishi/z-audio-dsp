@@ -147,6 +147,30 @@ pub enum ParamId {
     VcslReleaseLevel = 183,
     VcslReleaseTime = 184,
     VcslStereoWidth = 185,
+
+    // --- Generic sampler (200-219) ---
+    SamplerMasterGain = 200,
+    SamplerRootNote = 201,
+    SamplerTune = 202,
+    SamplerOffset = 203,
+    SamplerVelocityCurve = 204,
+    SamplerReleaseTime = 205,
+    SamplerStereoWidth = 206,
+    SamplerLoopMode = 207,
+    SamplerLoopStart = 208,
+    SamplerLoopEnd = 209,
+    SamplerLoopXfade = 210,
+    SamplerUnisonVoices = 211,
+    SamplerUnisonDetune = 212,
+    SamplerUnisonSpread = 213,
+
+    // --- Diffuser (220-239) ---
+    DiffuserMix = 220,
+    DiffuserDiffusion = 221,
+    DiffuserSize = 222,
+    DiffuserWidth = 223,
+    DiffuserOutputGain = 224,
+    DiffuserAllpassCount = 225,
 }
 
 /// The physical interpretation of a [`ParamMetadata`] value.
@@ -189,7 +213,7 @@ pub struct ParamMetadata {
 
 impl ParamId {
     /// Every [`ParamId`] variant, in declaration order.
-    pub const ALL: [ParamId; 107] = [
+    pub const ALL: [ParamId; 127] = [
         ParamId::MasterGain,
         ParamId::MaxPolyphony,
         ParamId::GeneratorKind,
@@ -297,6 +321,26 @@ impl ParamId {
         ParamId::VcslReleaseLevel,
         ParamId::VcslReleaseTime,
         ParamId::VcslStereoWidth,
+        ParamId::SamplerMasterGain,
+        ParamId::SamplerRootNote,
+        ParamId::SamplerTune,
+        ParamId::SamplerOffset,
+        ParamId::SamplerVelocityCurve,
+        ParamId::SamplerReleaseTime,
+        ParamId::SamplerStereoWidth,
+        ParamId::SamplerLoopMode,
+        ParamId::SamplerLoopStart,
+        ParamId::SamplerLoopEnd,
+        ParamId::SamplerLoopXfade,
+        ParamId::SamplerUnisonVoices,
+        ParamId::SamplerUnisonDetune,
+        ParamId::SamplerUnisonSpread,
+        ParamId::DiffuserMix,
+        ParamId::DiffuserDiffusion,
+        ParamId::DiffuserSize,
+        ParamId::DiffuserWidth,
+        ParamId::DiffuserOutputGain,
+        ParamId::DiffuserAllpassCount,
     ];
 
     /// Returns this parameter's metadata (name, unit, range, default).
@@ -822,6 +866,88 @@ impl ParamId {
                 step_count: None,
             },
             ParamId::VcslStereoWidth => unit_param(self, "vcsl_stereo_width", 0.0, 1.0, 1.0),
+            ParamId::SamplerMasterGain => db_param(self, "sampler_master_gain", -48.0, 12.0, 0.0),
+            ParamId::SamplerRootNote => ParamMetadata {
+                id: self,
+                name: "sampler_root_note",
+                unit: ParamUnit::Linear,
+                min: 0.0,
+                max: 127.0,
+                default: 60.0,
+                step_count: None,
+            },
+            ParamId::SamplerTune => ParamMetadata {
+                id: self,
+                name: "sampler_tune",
+                unit: ParamUnit::Linear,
+                min: -100.0,
+                max: 100.0,
+                default: 0.0,
+                step_count: None,
+            },
+            ParamId::SamplerOffset => unit_param(self, "sampler_offset", 0.0, 1.0, 0.0),
+            ParamId::SamplerVelocityCurve => {
+                unit_param(self, "sampler_velocity_curve", 0.0, 1.0, 0.5)
+            }
+            ParamId::SamplerReleaseTime => ParamMetadata {
+                id: self,
+                name: "sampler_release_time",
+                unit: ParamUnit::Seconds,
+                min: 0.01,
+                max: 10.0,
+                default: 0.2,
+                step_count: None,
+            },
+            ParamId::SamplerStereoWidth => unit_param(self, "sampler_stereo_width", 0.0, 1.0, 1.0),
+            ParamId::SamplerLoopMode => ParamMetadata {
+                id: self,
+                name: "sampler_loop_mode",
+                unit: ParamUnit::Enum,
+                min: 0.0,
+                max: (crate::LoopMode::VARIANT_COUNT - 1) as f32,
+                default: crate::LoopMode::default().to_param_value(),
+                step_count: Some(crate::LoopMode::VARIANT_COUNT),
+            },
+            ParamId::SamplerLoopStart => unit_param(self, "sampler_loop_start", 0.0, 1.0, 0.0),
+            ParamId::SamplerLoopEnd => unit_param(self, "sampler_loop_end", 0.0, 1.0, 1.0),
+            ParamId::SamplerLoopXfade => ParamMetadata {
+                id: self,
+                name: "sampler_loop_xfade",
+                unit: ParamUnit::Seconds,
+                min: 0.0,
+                max: 0.2,
+                default: 0.01,
+                step_count: None,
+            },
+            ParamId::SamplerUnisonVoices => ParamMetadata {
+                id: self,
+                name: "sampler_unison_voices",
+                unit: ParamUnit::Linear,
+                min: 1.0,
+                max: 8.0,
+                default: 1.0,
+                step_count: None,
+            },
+            ParamId::SamplerUnisonDetune => ParamMetadata {
+                id: self,
+                name: "sampler_unison_detune",
+                unit: ParamUnit::Linear,
+                min: 0.0,
+                max: 50.0,
+                default: 10.0,
+                step_count: None,
+            },
+            ParamId::SamplerUnisonSpread => {
+                unit_param(self, "sampler_unison_spread", 0.0, 1.0, 0.5)
+            }
+            ParamId::DiffuserMix => unit_param(self, "diffuser_mix", 0.0, 1.0, 1.0),
+            ParamId::DiffuserDiffusion => unit_param(self, "diffuser_diffusion", 0.0, 1.0, 0.04),
+            ParamId::DiffuserSize => unit_param(self, "diffuser_size", 0.0, 1.0, 0.5),
+            ParamId::DiffuserWidth => unit_param(self, "diffuser_width", 0.0, 1.0, 1.0),
+            ParamId::DiffuserOutputGain => db_param(self, "diffuser_output_gain", -24.0, 24.0, 0.0),
+            ParamId::DiffuserAllpassCount => {
+                unit_param(self, "diffuser_allpass_count", 1.0, 100.0, 100.0)
+            }
         }
     }
 }
@@ -858,8 +984,8 @@ mod tests {
     use crate::{ButterworthKind, EnvelopeParams, Gain, GeneratorParams, LfoParams};
 
     #[test]
-    fn all_has_101_unique_variants() {
-        assert_eq!(ParamId::ALL.len(), 107);
+    fn all_has_127_unique_variants() {
+        assert_eq!(ParamId::ALL.len(), 127);
         let mut seen = HashSet::new();
         for id in ParamId::ALL {
             assert!(seen.insert(id as u32), "duplicate ParamId in ALL: {id:?}");
@@ -1007,10 +1133,9 @@ mod tests {
     #[test]
     fn eq_metadata_matches_eq_defaults() {
         let eq = crate::ThreeBandButterworthEq::new();
-        // All three bands start disabled (pass-through): cascading a default
-        // low-pass(200Hz) and high-pass(5kHz) in series otherwise carves out
-        // most of the musical range between them, which a 3-band EQ should
-        // never do until the user explicitly turns a band on.
+        // All three bands start disabled (pass-through). Enabling a 0 dB
+        // band is also unity, so hosts can turn bands on without changing the
+        // signal until the user applies boost or cut.
         assert_eq!(
             ParamId::EqLowEnabled.metadata().default,
             if eq.low.enabled { 1.0 } else { 0.0 }

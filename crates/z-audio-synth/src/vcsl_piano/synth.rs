@@ -235,6 +235,11 @@ mod tests {
             ampeg_sustain: 1.0,
             ampeg_release: 0.4,
             sample,
+            loop_mode: z_audio_dsp::LoopMode::Off,
+            loop_start_frames: 0,
+            loop_end_frames: 0,
+            loop_xfade_frames: 0,
+            pan: 0.0,
         });
         Arc::new(VcslSampleBank {
             regions: vec![region],
@@ -349,6 +354,11 @@ mod tests {
             ampeg_sustain: 1.0,
             ampeg_release: 0.4,
             sample,
+            loop_mode: z_audio_dsp::LoopMode::Off,
+            loop_start_frames: 0,
+            loop_end_frames: 0,
+            loop_xfade_frames: 0,
+            pan: 0.0,
         });
         let bank = Arc::new(VcslSampleBank { regions: vec![region] });
 

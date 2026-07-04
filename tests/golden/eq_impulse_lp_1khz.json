@@ -1,7 +1,7 @@
 {
-  "description": "3-band EQ impulse response, low-pass @ 1kHz",
+  "description": "3-band EQ impulse response, low shelf -12dB @ 1kHz",
   "sample_count": 1024,
-  "rms": 0.00671433,
-  "peak": 0.05953187,
-  "spectral_centroid_hz": 905.3667
+  "rms": 0.03028391,
+  "peak": 0.93705249,
+  "spectral_centroid_hz": 1553.7375
 }

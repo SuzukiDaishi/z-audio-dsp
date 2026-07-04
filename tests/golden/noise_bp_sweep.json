@@ -1,7 +1,7 @@
 {
-  "description": "NoiseGenerator through EQ mid band-pass (q=4.0), 100Hz -> 6kHz log sweep, 0.5 seconds",
+  "description": "NoiseGenerator through EQ mid bell (+12dB, q=4.0), 100Hz -> 6kHz log sweep, 0.5 seconds",
   "sample_count": 24000,
-  "rms": 0.07970268,
-  "peak": 0.61297286,
-  "spectral_centroid_hz": 3370.5876
+  "rms": 0.61863464,
+  "peak": 2.03988695,
+  "spectral_centroid_hz": 11546.6091
 }

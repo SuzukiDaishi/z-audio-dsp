@@ -170,9 +170,9 @@ fn render_saw_c4_env() -> Vec<f32> {
     signal
 }
 
-/// NoiseGenerator through the EQ mid band (band-pass, q=4.0), with the
-/// low/high bands disabled and the mid frequency sweeping logarithmically
-/// from 100 Hz to 6 kHz over 0.5 seconds.
+/// NoiseGenerator through the EQ mid bell (+12 dB, q=4.0), with the low/high
+/// bands disabled and the mid frequency sweeping logarithmically from 100 Hz
+/// to 6 kHz over 0.5 seconds.
 fn render_noise_bp_sweep() -> Vec<f32> {
     let mut noise = NoiseGenerator::new(42);
     noise.prepare(SAMPLE_RATE, BLOCK_SIZE);
@@ -182,6 +182,7 @@ fn render_noise_bp_sweep() -> Vec<f32> {
     eq.mid.enabled = true;
     eq.high.enabled = false;
     eq.mid.kind = ButterworthKind::BandPass;
+    eq.mid.gain_db = 12.0;
     eq.mid.q = 4.0;
     eq.prepare(SAMPLE_RATE, BLOCK_SIZE);
 
@@ -212,8 +213,8 @@ fn render_noise_bp_sweep() -> Vec<f32> {
     left
 }
 
-/// 3-band EQ impulse response with only the low band enabled as a low-pass
-/// at 1 kHz.
+/// 3-band EQ impulse response with only the low band enabled as a -12 dB low
+/// shelf at 1 kHz.
 fn render_eq_impulse_lp_1khz() -> Vec<f32> {
     let mut eq = ThreeBandButterworthEq::new();
     eq.low.enabled = true;
@@ -221,6 +222,7 @@ fn render_eq_impulse_lp_1khz() -> Vec<f32> {
     eq.high.enabled = false;
     eq.low.kind = ButterworthKind::LowPass;
     eq.low.frequency_hz = 1_000.0;
+    eq.low.gain_db = -12.0;
     eq.low.q = BUTTERWORTH_Q;
     eq.prepare(SAMPLE_RATE, CENTROID_WINDOW);
 
@@ -278,13 +280,13 @@ fn regenerate_golden_snapshots() {
         (
             "noise_bp_sweep",
             render_noise_bp_sweep(),
-            "NoiseGenerator through EQ mid band-pass (q=4.0), 100Hz -> 6kHz log sweep, 0.5 seconds",
+            "NoiseGenerator through EQ mid bell (+12dB, q=4.0), 100Hz -> 6kHz log sweep, 0.5 seconds",
             12_000,
         ),
         (
             "eq_impulse_lp_1khz",
             render_eq_impulse_lp_1khz(),
-            "3-band EQ impulse response, low-pass @ 1kHz",
+            "3-band EQ impulse response, low shelf -12dB @ 1kHz",
             0,
         ),
     ];

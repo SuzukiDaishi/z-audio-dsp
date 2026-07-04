@@ -38,7 +38,10 @@ pub use dynamics::{
     BallisticsFilter, Compressor, CompressorParams, DetectorMode, LevelDetector, Limiter,
     LimiterParams, compressor_gain_db, limiter_gain_db,
 };
-pub use effects::{BUTTERWORTH_Q, ButterworthBand, ButterworthKind, Gain, ThreeBandButterworthEq};
+pub use effects::{
+    BUTTERWORTH_Q, ButterworthBand, ButterworthKind, Diffuser, DiffuserParams, Gain,
+    ThreeBandButterworthEq,
+};
 pub use excitation::HammerExciter;
 pub use formula::{
     FORMULA_MACRO_COUNT, FORMULA_STACK_SIZE, FormulaGenerator, FormulaMacroMetadata, FormulaOpcode,
@@ -56,7 +59,9 @@ pub use modulators::{
 pub use params::{ParamId, ParamMetadata, ParamUnit};
 pub use resonators::{BiquadResonator, BodyResonator, ModalBank, ModalMode};
 pub use reverb::{ParametricReverb, ParametricReverbParams};
-pub use sampler::{SampleBuffer, SampleRegion, SamplerEngine, SamplerEngineConfig, TriggerKind};
+pub use sampler::{
+    LoopMode, SampleBuffer, SampleRegion, SamplerEngine, SamplerEngineConfig, TriggerKind,
+};
 
 /// Produces an audio-rate mono signal (oscillators, noise sources, etc.).
 pub trait Generator {

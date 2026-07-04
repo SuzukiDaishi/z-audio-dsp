@@ -207,6 +207,14 @@ pub fn load_bank_bytes(bytes: &[u8]) -> Result<VcslSampleBank, BankError> {
             ampeg_sustain,
             ampeg_release,
             sample,
+            // VCSL piano banks don't carry loop metadata yet (Phase 2 of
+            // `docs/汎用サンプラー実装計画.md` added looping to the generic
+            // sampler first); VCSL regions always play straight through.
+            loop_mode: z_audio_dsp::LoopMode::Off,
+            loop_start_frames: 0,
+            loop_end_frames: 0,
+            loop_xfade_frames: 0,
+            pan: 0.0,
         }));
     }
 

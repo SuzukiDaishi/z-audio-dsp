@@ -1,6 +1,6 @@
 //! Biquad filter implementation (Transposed Direct Form II) plus RBJ "Audio
-//! EQ Cookbook" coefficient calculators for the filter types used by the
-//! 3-band Butterworth EQ.
+//! EQ Cookbook" coefficient calculators for filter and EQ shapes used by the
+//! DSP effects.
 
 use core::f32::consts::PI;
 
@@ -141,6 +141,79 @@ pub fn bandpass_coefficients(
     (b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
 }
 
+/// RBJ Audio EQ Cookbook coefficients for a peaking EQ band, normalized so
+/// that `a0 == 1`. Returns `(b0, b1, b2, a1, a2)`.
+pub fn peaking_eq_coefficients(
+    frequency_hz: f32,
+    q: f32,
+    gain_db: f32,
+    sample_rate: f32,
+) -> (f32, f32, f32, f32, f32) {
+    let a = 10.0_f32.powf(gain_db / 40.0);
+    let w0 = 2.0 * PI * frequency_hz / sample_rate;
+    let cos_w0 = w0.cos();
+    let alpha = w0.sin() / (2.0 * q);
+
+    let b0 = 1.0 + alpha * a;
+    let b1 = -2.0 * cos_w0;
+    let b2 = 1.0 - alpha * a;
+    let a0 = 1.0 + alpha / a;
+    let a1 = -2.0 * cos_w0;
+    let a2 = 1.0 - alpha / a;
+
+    (b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+}
+
+/// RBJ Audio EQ Cookbook coefficients for a low-shelf EQ band, normalized so
+/// that `a0 == 1`. Returns `(b0, b1, b2, a1, a2)`.
+pub fn low_shelf_coefficients(
+    frequency_hz: f32,
+    q: f32,
+    gain_db: f32,
+    sample_rate: f32,
+) -> (f32, f32, f32, f32, f32) {
+    let a = 10.0_f32.powf(gain_db / 40.0);
+    let sqrt_a = a.sqrt();
+    let w0 = 2.0 * PI * frequency_hz / sample_rate;
+    let cos_w0 = w0.cos();
+    let alpha = w0.sin() / (2.0 * q);
+    let two_sqrt_a_alpha = 2.0 * sqrt_a * alpha;
+
+    let b0 = a * ((a + 1.0) - (a - 1.0) * cos_w0 + two_sqrt_a_alpha);
+    let b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cos_w0);
+    let b2 = a * ((a + 1.0) - (a - 1.0) * cos_w0 - two_sqrt_a_alpha);
+    let a0 = (a + 1.0) + (a - 1.0) * cos_w0 + two_sqrt_a_alpha;
+    let a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cos_w0);
+    let a2 = (a + 1.0) + (a - 1.0) * cos_w0 - two_sqrt_a_alpha;
+
+    (b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+}
+
+/// RBJ Audio EQ Cookbook coefficients for a high-shelf EQ band, normalized so
+/// that `a0 == 1`. Returns `(b0, b1, b2, a1, a2)`.
+pub fn high_shelf_coefficients(
+    frequency_hz: f32,
+    q: f32,
+    gain_db: f32,
+    sample_rate: f32,
+) -> (f32, f32, f32, f32, f32) {
+    let a = 10.0_f32.powf(gain_db / 40.0);
+    let sqrt_a = a.sqrt();
+    let w0 = 2.0 * PI * frequency_hz / sample_rate;
+    let cos_w0 = w0.cos();
+    let alpha = w0.sin() / (2.0 * q);
+    let two_sqrt_a_alpha = 2.0 * sqrt_a * alpha;
+
+    let b0 = a * ((a + 1.0) + (a - 1.0) * cos_w0 + two_sqrt_a_alpha);
+    let b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cos_w0);
+    let b2 = a * ((a + 1.0) + (a - 1.0) * cos_w0 - two_sqrt_a_alpha);
+    let a0 = (a + 1.0) - (a - 1.0) * cos_w0 + two_sqrt_a_alpha;
+    let a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cos_w0);
+    let a2 = (a + 1.0) - (a - 1.0) * cos_w0 - two_sqrt_a_alpha;
+
+    (b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +252,32 @@ mod tests {
             bandpass_coefficients(1000.0, core::f32::consts::FRAC_1_SQRT_2, 48_000.0);
         for c in [b0, b1, b2, a1, a2] {
             assert!(c.is_finite());
+        }
+    }
+
+    #[test]
+    fn eq_coefficients_are_finite() {
+        for (b0, b1, b2, a1, a2) in [
+            low_shelf_coefficients(1000.0, core::f32::consts::FRAC_1_SQRT_2, 6.0, 48_000.0),
+            peaking_eq_coefficients(1000.0, core::f32::consts::FRAC_1_SQRT_2, -6.0, 48_000.0),
+            high_shelf_coefficients(1000.0, core::f32::consts::FRAC_1_SQRT_2, 6.0, 48_000.0),
+        ] {
+            for c in [b0, b1, b2, a1, a2] {
+                assert!(c.is_finite());
+            }
+        }
+    }
+
+    #[test]
+    fn zero_gain_eq_coefficients_are_unity_response() {
+        for (b0, b1, b2, a1, a2) in [
+            low_shelf_coefficients(1000.0, core::f32::consts::FRAC_1_SQRT_2, 0.0, 48_000.0),
+            peaking_eq_coefficients(1000.0, core::f32::consts::FRAC_1_SQRT_2, 0.0, 48_000.0),
+            high_shelf_coefficients(1000.0, core::f32::consts::FRAC_1_SQRT_2, 0.0, 48_000.0),
+        ] {
+            assert!((b0 - 1.0).abs() < 1.0e-6, "b0={b0}");
+            assert!((b1 - a1).abs() < 1.0e-6, "b1={b1}, a1={a1}");
+            assert!((b2 - a2).abs() < 1.0e-6, "b2={b2}, a2={a2}");
         }
     }
 
